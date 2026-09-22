@@ -9,6 +9,8 @@
 from __future__ import annotations
 
 import math
+import re
+import unicodedata
 from datetime import date, datetime, timezone
 from pathlib import Path
 
@@ -47,6 +49,7 @@ COLUMNAS_BD = {
     "Referencia de Pago": "referencia_pago",
     "requiere_revision": "requiere_revision",
     "motivo_revision": "motivo_revision",
+    "_fila_excel": "fila_excel",
 }
 _A_SALIDA = {v: k for k, v in COLUMNAS_BD.items()}
 
@@ -82,8 +85,8 @@ def fila_a_bd(fila: dict, corrida_id: int, n: int) -> dict:
         v = fila.get(salida)
         if col == "fecha_cierre":
             registro[col] = _fecha(v)
-        elif col == "campania_trabajo":
-            registro[col] = int(v)
+        elif col in ("campania_trabajo", "fila_excel"):
+            registro[col] = None if proc.es_vacio(v) else int(v)
         elif col == "requiere_revision":
             registro[col] = bool(v)
         else:
@@ -97,7 +100,7 @@ def bd_a_fila(registro: dict) -> dict:
         v = registro.get(col)
         if col == "fecha_cierre":
             v = datetime.strptime(v[:10], "%Y-%m-%d") if v else None
-        elif col in ("requiere_revision", "campania_trabajo", "motivo_revision"):
+        elif col in ("requiere_revision", "campania_trabajo", "motivo_revision", "fila_excel"):
             pass
         elif col in ("zona", "ruta", "id_cobrador", "no_dama", "anio_saldo", "campania_saldo",
                      "digito_verificador", "morosidad"):
@@ -105,6 +108,13 @@ def bd_a_fila(registro: dict) -> dict:
         fila[salida] = v
     fila["motivo_revision"] = fila.get("motivo_revision") or ""
     return fila
+
+
+def _nombre_seguro(nombre: str) -> str:
+    """Nombre de archivo válido como llave de Storage (sin acentos ni caracteres raros)."""
+    base = unicodedata.normalize("NFKD", nombre or "cartera.xlsx")
+    base = "".join(c for c in base if not unicodedata.combining(c))
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", base) or "cartera.xlsx"
 
 
 def _lotes(elementos: list, tamanio: int = LOTE):
@@ -194,7 +204,9 @@ class AlmacenSupabase:
         self.db.table("catalogo_cp").delete().lt("actualizado_en", marca).execute()
 
     # ---- Bases generadas
-    def guardar_corrida(self, resultado: proc.Resultado, campania: int, archivo: str, progreso=None) -> int:
+    def guardar_corrida(
+        self, resultado: proc.Resultado, campania: int, archivo: str, progreso=None, contenido: bytes | None = None
+    ) -> int:
         r = self.db.table("corridas").insert(
             {
                 "campania_trabajo": int(campania),
@@ -206,6 +218,12 @@ class AlmacenSupabase:
         ).execute()
         corrida_id = r.data[0]["id"]
         try:
+            if contenido is not None:
+                ruta = f"carteras/{corrida_id}/{_nombre_seguro(archivo)}"
+                self.db.storage.from_(BUCKET).upload(
+                    ruta, contenido, {"content-type": "application/octet-stream", "upsert": "true"}
+                )
+                self.db.table("corridas").update({"archivo_original": ruta}).eq("id", corrida_id).execute()
             registros = [
                 fila_a_bd(f, corrida_id, n) for n, f in enumerate(resultado.base.to_dict("records"), start=1)
             ]
@@ -226,6 +244,13 @@ class AlmacenSupabase:
         ).order("creado_en", desc=True).limit(limite).execute()
         return pd.DataFrame(r.data or [])
 
+    def leer_archivo_original(self, corrida_id: int) -> tuple[bytes, str] | None:
+        """Archivo de cartera original de la corrida (contenido, nombre), si se guardó."""
+        c = self.db.table("corridas").select("archivo_original,archivo_cartera").eq("id", corrida_id).limit(1).execute()
+        if not c.data or not c.data[0].get("archivo_original"):
+            return None
+        return self.db.storage.from_(BUCKET).download(c.data[0]["archivo_original"]), c.data[0]["archivo_cartera"]
+
     def leer_corrida(self, corrida_id: int) -> tuple[proc.Resultado, int]:
         c = self.db.table("corridas").select("*").eq("id", corrida_id).limit(1).execute()
         if not c.data:
@@ -241,13 +266,19 @@ class AlmacenSupabase:
                 break
             inicio += LOTE
         base = pd.DataFrame(
-            [bd_a_fila(f) for f in filas], columns=proc.COLUMNAS_SALIDA + ["requiere_revision", "motivo_revision"],
+            [bd_a_fila(f) for f in filas], columns=proc.COLUMNAS_BASE,
             dtype=object,
         )
         base["requiere_revision"] = base["requiere_revision"].astype(bool)
         return proc.Resultado(base=base, resumen=corrida["resumen"], advertencias=[]), corrida["campania_trabajo"]
 
     def borrar_corrida(self, corrida_id: int) -> None:
+        c = self.db.table("corridas").select("archivo_original").eq("id", corrida_id).limit(1).execute()
+        if c.data and c.data[0].get("archivo_original"):
+            try:
+                self.db.storage.from_(BUCKET).remove([c.data[0]["archivo_original"]])
+            except Exception:  # noqa: BLE001 - no impedir el borrado de la corrida
+                pass
         self.db.table("corridas").delete().eq("id", corrida_id).execute()
 
 

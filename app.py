@@ -6,6 +6,7 @@ Ejecutar con:  streamlit run app.py
 from __future__ import annotations
 
 import os
+import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -150,13 +151,47 @@ with st.sidebar:
             st.toast(f"Catálogo guardado: {len(nuevo):,} códigos postales.")
             st.rerun()
 
+    st.divider()
+
+    # ---- Formato de salida
+    st.subheader("Formato de salida")
+    st.caption(
+        "El Excel sale igual que la cartera enviada (mismas columnas, orden y colores); "
+        "el sistema llena las columnas vacías y anexa al final las que no existen."
+    )
+    color_sistema = st.color_picker(
+        "Color de las columnas que agrega el sistema", value=proc.COLOR_SISTEMA, key="color_sistema"
+    )
+    colorear_llenadas = st.checkbox(
+        "Pintar también las columnas de la cartera que llena el sistema",
+        value=False,
+        key="colorear_llenadas",
+        help="REGION, RUTA, DIVISION, ID COBRADOR, Concatenado, Fecha de cierre, Morosidad, "
+        "Campaña de trabajo y Referencia de Pago, cuando ya vienen como columnas vacías en la cartera.",
+    )
+    st.caption("🟨 Las celdas anexadas de las filas que requieren revisión se marcan en amarillo.")
+
 
 # --------------------------------------------------------------------------
 # Presentación de resultados
 # --------------------------------------------------------------------------
 
 
-def mostrar_resultado(resultado: proc.Resultado, excel: bytes, csv: bytes, n: int, clave: str) -> None:
+@st.cache_data(show_spinner="Preparando archivos…", max_entries=6)
+def archivos_descarga(clave: str, _resultado, _original, n: int, color: str, colorear: bool):
+    """Excel sobre la cartera original (si es .xlsx/.xlsm), Excel estándar y CSV."""
+    original = None
+    if _original is not None and proc.es_excel_openpyxl(_original[1]):
+        try:
+            original = proc.exportar_excel_original(
+                _original[0], _original[1], _resultado, n, color_sistema=color, colorear_llenadas=colorear
+            )
+        except Exception as e:  # noqa: BLE001
+            original = e
+    return original, proc.exportar_excel(_resultado, n), proc.exportar_csv(_resultado)
+
+
+def mostrar_resultado(resultado: proc.Resultado, n: int, clave: str, original: tuple[bytes, str] | None) -> None:
     r = resultado.resumen
     total = r["Total de filas procesadas"]
     for adv in resultado.advertencias:
@@ -181,18 +216,39 @@ def mostrar_resultado(resultado: proc.Resultado, excel: bytes, csv: bytes, n: in
     with st.expander("Detalle del resumen"):
         st.table(pd.DataFrame(list(r.items()), columns=["Concepto", "Filas"]).set_index("Concepto"))
 
-    d1, d2, _ = st.columns([1, 1, 2])
-    d1.download_button(
-        "⬇️ Descargar Excel",
-        data=excel,
+    excel_original, excel_estandar, csv = archivos_descarga(
+        clave, resultado, original, n, color_sistema, colorear_llenadas
+    )
+    d1, d2, d3 = st.columns([3, 2, 2])
+    if isinstance(excel_original, bytes):
+        nombre_original = original[1]
+        base_nombre, _, ext = nombre_original.rpartition(".")
+        d1.download_button(
+            "⬇️ Descargar cartera con columnas anexadas",
+            data=excel_original,
+            file_name=f"{base_nombre}_Base_Gestion.{ext}",
+            mime=alm.MIME_XLSX if ext.lower() == "xlsx" else "application/vnd.ms-excel.sheet.macroEnabled.12",
+            type="primary",
+            width="stretch",
+            key=f"orig_{clave}",
+        )
+    else:
+        if isinstance(excel_original, Exception):
+            d1.warning(f"No se pudo conservar el formato original: {excel_original}")
+        elif original is None:
+            d1.caption("No está disponible el archivo original de esta corrida; descargue el formato estándar.")
+        else:
+            d1.caption("El formato original sólo se conserva con archivos .xlsx/.xlsm; descargue el formato estándar.")
+    d2.download_button(
+        "⬇️ Excel formato estándar (22 columnas)",
+        data=excel_estandar,
         file_name=f"Base_Gestion_Campaña_{n}.xlsx",
         mime=alm.MIME_XLSX,
-        type="primary",
         width="stretch",
         key=f"xlsx_{clave}",
     )
-    d2.download_button(
-        "⬇️ Descargar CSV",
+    d3.download_button(
+        "⬇️ CSV",
         data=csv,
         file_name=f"Base_Gestion_Campaña_{n}.csv",
         mime="text/csv",
@@ -200,7 +256,7 @@ def mostrar_resultado(resultado: proc.Resultado, excel: bytes, csv: bytes, n: in
         key=f"csv_{clave}",
     )
 
-    base = resultado.base
+    base = resultado.base.drop(columns=["_fila_excel"], errors="ignore")
     tab_base, tab_rev = st.tabs(["Base de gestión", f"Revisión ({int(base['requiere_revision'].sum()):,})"])
     with tab_base:
         solo_rev = st.toggle("Mostrar solo filas que requieren revisión", key=f"solo_{clave}")
@@ -292,8 +348,6 @@ def pantalla_generar() -> None:
                 cartera = proc.leer_cartera(archivo_cartera.getvalue(), archivo_cartera.name)
             with st.spinner(f"Procesando {len(cartera):,} cuentas…"):
                 resultado = proc.generar_base(cartera, estructura, catalogo, int(campania))
-                excel = proc.exportar_excel(resultado, int(campania))
-                csv = proc.exportar_csv(resultado)
         except Exception as e:  # noqa: BLE001
             st.error(f"No se pudo generar la base: {e}")
             return
@@ -306,6 +360,7 @@ def pantalla_generar() -> None:
                     int(campania),
                     archivo_cartera.name,
                     progreso=lambda x: barra.progress(x, text="Guardando en Supabase…"),
+                    contenido=archivo_cartera.getvalue(),
                 )
             except Exception as e:  # noqa: BLE001
                 st.error(f"La base se generó, pero no se pudo guardar en Supabase: {e}")
@@ -313,10 +368,10 @@ def pantalla_generar() -> None:
                 barra.empty()
         st.session_state["resultado"] = {
             "resultado": resultado,
-            "excel": excel,
-            "csv": csv,
+            "original": (archivo_cartera.getvalue(), archivo_cartera.name),
             "campania": int(campania),
             "corrida_id": corrida_id,
+            "clave": f"actual_{uuid.uuid4().hex}",
         }
 
     if "resultado" in st.session_state:
@@ -325,7 +380,7 @@ def pantalla_generar() -> None:
         st.subheader(f"Resumen — Campaña de Trabajo {datos['campania']}")
         if datos.get("corrida_id"):
             st.caption(f"✅ Guardada en Supabase como corrida #{datos['corrida_id']}.")
-        mostrar_resultado(datos["resultado"], datos["excel"], datos["csv"], datos["campania"], "actual")
+        mostrar_resultado(datos["resultado"], datos["campania"], datos["clave"], datos["original"])
 
 
 # --------------------------------------------------------------------------
@@ -336,7 +391,7 @@ def pantalla_generar() -> None:
 @st.cache_data(show_spinner="Descargando base guardada…", max_entries=5)
 def cargar_corrida(_almacen, corrida_id: int):
     resultado, n = _almacen.leer_corrida(corrida_id)
-    return resultado, n, proc.exportar_excel(resultado, n), proc.exportar_csv(resultado)
+    return resultado, n, _almacen.leer_archivo_original(corrida_id)
 
 
 def pantalla_historial() -> None:
@@ -398,13 +453,13 @@ def pantalla_historial() -> None:
     abierto = st.session_state.get("historial_abierto")
     if abierto in opciones:
         try:
-            resultado, n, excel, csv = cargar_corrida(almacen, abierto)
+            resultado, n, original = cargar_corrida(almacen, abierto)
         except Exception as e:  # noqa: BLE001
             st.error(f"No se pudo leer la corrida: {e}")
             return
         st.divider()
         st.subheader(f"Corrida #{abierto} — Campaña de Trabajo {n}")
-        mostrar_resultado(resultado, excel, csv, n, f"hist_{abierto}")
+        mostrar_resultado(resultado, n, f"hist_{abierto}", original)
 
 
 st.title("📋 Base de Gestión por Campaña de Trabajo")

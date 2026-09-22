@@ -67,3 +67,14 @@ def test_corrida_fallida_no_deja_residuos(almacen):
     with pytest.raises(RuntimeError):
         almacen.guardar_corrida(_resultado(), 19, "x.xlsx")
     assert almacen.listar_corridas().empty
+
+
+def test_corrida_guarda_archivo_original(almacen):
+    res = _resultado()
+    cid = almacen.guardar_corrida(res, 19, "Cartera_Campaña_19.xlsx", contenido=b"XLSX")
+    contenido, nombre = almacen.leer_archivo_original(cid)
+    assert contenido == b"XLSX" and nombre == "Cartera_Campaña_19.xlsx"
+    ruta = almacen.db.tablas["corridas"][0]["archivo_original"]
+    assert ruta == f"carteras/{cid}/Cartera_Campana_19.xlsx"
+    almacen.borrar_corrida(cid)
+    assert ruta not in almacen.db.objetos

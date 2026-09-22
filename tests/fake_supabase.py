@@ -22,6 +22,10 @@ class _Consulta:
         self.op, self.payload, self.conflicto = "upsert", filas, on_conflict
         return self
 
+    def update(self, valores):
+        self.op, self.payload = "update", valores
+        return self
+
     def delete(self):
         self.op = "delete"
         return self
@@ -69,6 +73,10 @@ class _Consulta:
                 salida.append(n)
             return SimpleNamespace(data=salida, count=None)
         sel = [f for f in filas if all(p(f) for p in self.filtros)]
+        if self.op == "update":
+            for f in sel:
+                f.update(copy.deepcopy(self.payload))
+            return SimpleNamespace(data=copy.deepcopy(sel), count=None)
         if self.op == "delete":
             self.db.tablas[self.tabla] = [f for f in filas if f not in sel]
             if self.tabla == "corridas":
@@ -98,6 +106,11 @@ class _Bucket:
         if path in self.objetos and (opciones or {}).get("upsert") != "true":
             raise RuntimeError("ya existe")
         self.objetos[path] = (contenido, datetime.now(timezone.utc).isoformat())
+
+    def remove(self, paths):
+        for p in paths:
+            self.objetos.pop(p, None)
+        return []
 
     def download(self, path):
         return self.objetos[path][0]

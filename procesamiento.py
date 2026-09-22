@@ -45,6 +45,8 @@ COLUMNAS_SALIDA = [
     "Referencia de Pago",
 ]
 
+COLUMNAS_BASE = COLUMNAS_SALIDA + ["requiere_revision", "motivo_revision", "_fila_excel"]
+
 COLUMNAS_CARTERA = [
     "ZONA",
     "NoDama",
@@ -496,12 +498,62 @@ def leer_estructura(contenido: bytes) -> EstructuraGeneral:
 # --------------------------------------------------------------------------
 
 
+def elegir_hoja_cartera(nombres: list[str]) -> str:
+    """Hoja 'BASE' si existe; si no, la primera."""
+    return next((h for h in nombres if normalizar_texto(h) == "base"), nombres[0])
+
+
+def ubicar_encabezado(filas) -> int:
+    """Índice (0-based) de la fila de encabezados: la primera que contiene 'NoDama'."""
+    for i, fila in enumerate(filas):
+        if i >= 20:
+            break
+        if any(normalizar_texto(v) == "nodama" for v in fila):
+            return i
+    return 0
+
+
+def es_excel_openpyxl(nombre: str) -> bool:
+    return nombre.lower().endswith((".xlsx", ".xlsm"))
+
+
 def leer_cartera(contenido: bytes, nombre: str = "") -> pd.DataFrame:
+    """Lee la cartera. La columna '_fila_excel' guarda la fila original de cada cuenta en
+    la hoja, para poder devolver después el mismo archivo con las columnas anexadas."""
     if nombre.lower().endswith(".csv"):
-        return _normalizar_columnas_cartera(pd.read_csv(io.BytesIO(contenido), dtype=object))
-    hojas = pd.ExcelFile(io.BytesIO(contenido)).sheet_names
-    hoja = next((h for h in hojas if normalizar_texto(h) == "base"), hojas[0])
-    df = pd.read_excel(io.BytesIO(contenido), sheet_name=hoja, dtype=object)
+        df = pd.read_csv(io.BytesIO(contenido), dtype=object)
+        df["_fila_excel"] = None
+        return _normalizar_columnas_cartera(df)
+    if not es_excel_openpyxl(nombre):  # .xls
+        hojas = pd.ExcelFile(io.BytesIO(contenido)).sheet_names
+        df = pd.read_excel(io.BytesIO(contenido), sheet_name=elegir_hoja_cartera(hojas), dtype=object)
+        df["_fila_excel"] = None
+        return _normalizar_columnas_cartera(df)
+
+    from openpyxl import load_workbook
+
+    wb = load_workbook(io.BytesIO(contenido), read_only=True, data_only=True)
+    try:
+        ws = wb[elegir_hoja_cartera(wb.sheetnames)]
+        filas = list(ws.iter_rows(values_only=True))
+    finally:
+        wb.close()
+    if not filas:
+        raise ValueError("La hoja de la cartera está vacía.")
+    h = ubicar_encabezado(filas)
+    encabezados, vistos = [], {}
+    for i, v in enumerate(filas[h]):
+        nombre_col = str(v).strip() if not es_vacio(v) else f"_col{i + 1}"
+        if nombre_col in vistos:
+            vistos[nombre_col] += 1
+            nombre_col = f"{nombre_col}.{vistos[nombre_col]}"
+        else:
+            vistos[nombre_col] = 0
+        encabezados.append(nombre_col)
+    ancho = len(encabezados)
+    datos = [list(f[:ancho]) + [None] * (ancho - len(f)) for f in filas[h + 1:]]
+    df = pd.DataFrame(datos, columns=encabezados, dtype=object)
+    df["_fila_excel"] = list(range(h + 2, h + 2 + len(datos)))
     return _normalizar_columnas_cartera(df)
 
 
@@ -535,7 +587,7 @@ def _normalizar_columnas_cartera(df: pd.DataFrame) -> pd.DataFrame:
 
 @dataclass
 class Resultado:
-    base: pd.DataFrame  # columnas de salida + requiere_revision + motivo_revision
+    base: pd.DataFrame  # COLUMNAS_BASE
     resumen: dict
     advertencias: list[str]
 
@@ -617,10 +669,11 @@ def generar_base(
                 "Referencia de Pago": f"{nodama}-{texto_llave(r['DigitoVerificador'])}",
                 "requiere_revision": bool(motivos),
                 "motivo_revision": "; ".join(motivos),
+                "_fila_excel": valor_limpio(r["_fila_excel"]) if "_fila_excel" in r else None,
             }
         )
 
-    base = pd.DataFrame(filas, columns=COLUMNAS_SALIDA + ["requiere_revision", "motivo_revision"], dtype=object)
+    base = pd.DataFrame(filas, columns=COLUMNAS_BASE, dtype=object)
     base["requiere_revision"] = base["requiere_revision"].astype(bool)
     total = len(base)
     cp_ok = int(base["Cp"].notna().sum())
@@ -700,6 +753,141 @@ def exportar_excel(resultado: Resultado, campania_trabajo: int) -> bytes:
 
 
 def exportar_csv(resultado: Resultado) -> bytes:
-    df = resultado.base.copy()
+    df = resultado.base.drop(columns=["_fila_excel"], errors="ignore")
     df["Fecha de cierre"] = pd.to_datetime(df["Fecha de cierre"], errors="coerce").dt.strftime("%d/%m/%Y")
     return df.to_csv(index=False).encode("utf-8-sig")
+
+
+# --------------------------------------------------------------------------
+# Exportación sobre el archivo original de la cartera
+# --------------------------------------------------------------------------
+
+# Columnas que calcula el sistema (las demás de COLUMNAS_SALIDA vienen de la cartera)
+COLUMNAS_SISTEMA = [c for c in COLUMNAS_SALIDA if c not in COLUMNAS_CARTERA]
+COLUMNA_MOTIVO = "Motivo de revisión"
+COLOR_SISTEMA = "#BDD7EE"  # azul claro por defecto
+COLOR_REVISION = "#FFFF00"
+
+
+def _argb(color: str) -> str:
+    c = color.strip().lstrip("#").upper()
+    if len(c) == 3:
+        c = "".join(ch * 2 for ch in c)
+    if not re.fullmatch(r"[0-9A-F]{6}", c):
+        raise ValueError(f"Color inválido: {color}")
+    return "FF" + c
+
+
+def _nombre_hoja_libre(wb, nombre: str) -> str:
+    candidato, i = nombre, 2
+    while candidato in wb.sheetnames:
+        candidato, i = f"{nombre} ({i})", i + 1
+    return candidato
+
+
+def exportar_excel_original(
+    contenido: bytes,
+    nombre: str,
+    resultado: Resultado,
+    campania_trabajo: int,
+    color_sistema: str = COLOR_SISTEMA,
+    colorear_llenadas: bool = False,
+) -> bytes:
+    """Devuelve la cartera tal como se envió (mismas columnas, orden, colores y formato),
+    llenando las columnas vacías que el sistema calcula y anexando al final las que no
+    existían. Las columnas anexadas llevan ``color_sistema``; las celdas anexadas de las
+    filas que requieren revisión van en amarillo. Si ``colorear_llenadas`` es True, las
+    columnas que ya existían y llenó el sistema también se pintan con ``color_sistema``."""
+    from copy import copy
+
+    from openpyxl import load_workbook
+    from openpyxl.styles import Font, PatternFill
+    from openpyxl.utils import get_column_letter
+
+    if not es_excel_openpyxl(nombre):
+        raise ValueError("Sólo se puede conservar el formato de archivos .xlsx o .xlsm.")
+
+    base = resultado.base
+    if base["_fila_excel"].isna().any():
+        raise ValueError("La base no tiene la ubicación de las filas en el archivo original.")
+
+    wb = load_workbook(io.BytesIO(contenido), keep_vba=nombre.lower().endswith(".xlsm"))
+    ws = wb[elegir_hoja_cartera(wb.sheetnames)]
+    filas_enc = [
+        [c.value for c in fila]
+        for fila in ws.iter_rows(min_row=1, max_row=min(ws.max_row, 20))
+    ]
+    fila_enc = ubicar_encabezado(filas_enc) + 1  # 1-based
+
+    encabezados = {}
+    ultima = 0
+    for celda in ws[fila_enc]:
+        if not es_vacio(celda.value):
+            ultima = max(ultima, celda.column)
+            encabezados.setdefault(normalizar_texto(celda.value), celda.column)
+
+    relleno_sistema = PatternFill(start_color=_argb(color_sistema), end_color=_argb(color_sistema), fill_type="solid")
+    relleno_revision = PatternFill(start_color=_argb(COLOR_REVISION), end_color=_argb(COLOR_REVISION), fill_type="solid")
+    modelo_enc = ws.cell(row=fila_enc, column=max(ultima, 1))
+
+    destino: dict[str, int] = {}
+    anexadas: set[int] = set()
+    siguiente = ultima + 1
+    for col in COLUMNAS_SISTEMA + [COLUMNA_MOTIVO]:
+        existente = encabezados.get(normalizar_texto(col))
+        if existente and col != COLUMNA_MOTIVO:
+            destino[col] = existente
+            continue
+        destino[col] = siguiente
+        anexadas.add(siguiente)
+        enc = ws.cell(row=fila_enc, column=siguiente, value=col)
+        enc.font = copy(modelo_enc.font) if modelo_enc.has_style else Font(bold=True)
+        enc.border = copy(modelo_enc.border)
+        enc.alignment = copy(modelo_enc.alignment)
+        enc.fill = relleno_sistema
+        ancho = 40 if col in ("Direccion Calle", "Colonia", COLUMNA_MOTIVO) else 18
+        ws.column_dimensions[get_column_letter(siguiente)].width = ancho
+        siguiente += 1
+
+    pintar = set(anexadas)
+    if colorear_llenadas:
+        pintar |= {c for n, c in destino.items() if c not in anexadas}
+        for c in pintar - anexadas:
+            ws.cell(row=fila_enc, column=c).fill = relleno_sistema
+
+    col_fecha = destino["Fecha de cierre"]
+    for fila in base.to_dict("records"):
+        r = int(fila["_fila_excel"])
+        revisar = bool(fila["requiere_revision"])
+        for col, c in destino.items():
+            valor = (fila["motivo_revision"] or None) if col == COLUMNA_MOTIVO else fila[col]
+            celda = ws.cell(row=r, column=c, value=valor)
+            if c == col_fecha and valor is not None:
+                celda.number_format = "DD/MM/YYYY"
+            if c in anexadas:
+                celda.fill = relleno_revision if revisar else relleno_sistema
+            elif c in pintar:
+                celda.fill = relleno_sistema
+
+    if ws.auto_filter.ref:
+        ws.auto_filter.ref = f"A{fila_enc}:{get_column_letter(siguiente - 1)}{ws.max_row}"
+
+    # Hojas adicionales de revisión y resumen (las hojas originales no se tocan)
+    rev = wb.create_sheet(_nombre_hoja_libre(wb, "Revision"))
+    rev.append(["Fila", "NoDama", "ZONA", "Direccion", "Cp", COLUMNA_MOTIVO])
+    for fila in base[base["requiere_revision"]].to_dict("records"):
+        rev.append([fila["_fila_excel"], fila["NoDama"], fila["ZONA"], fila["Direccion"], fila["Cp"], fila["motivo_revision"]])
+    res = wb.create_sheet(_nombre_hoja_libre(wb, "Resumen"))
+    res.append(["Concepto", "Valor"])
+    res.append(["Campaña de trabajo", campania_trabajo])
+    res.append(["Fecha de generación", datetime.now().strftime("%d/%m/%Y %H:%M")])
+    for k, v in resultado.resumen.items():
+        res.append([k, v])
+    for hoja, anchos in ((rev, [8, 14, 10, 60, 8, 70]), (res, [34, 22])):
+        for i, ancho in enumerate(anchos, start=1):
+            hoja.column_dimensions[get_column_letter(i)].width = ancho
+            hoja.cell(row=1, column=i).font = Font(bold=True)
+
+    salida = io.BytesIO()
+    wb.save(salida)
+    return salida.getvalue()

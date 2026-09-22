@@ -26,6 +26,7 @@ La app guarda todo en el proyecto de Supabase **base-cartera** (`https://irqpuyd
 | Estructura General de Bases | Storage, bucket privado `referencias` (+ copias en `historial/`) |
 | Catálogo de códigos postales | Tabla `catalogo_cp` |
 | Cada base generada | Tablas `corridas` (resumen) y `base_gestion` (filas, con `requiere_revision`) |
+| Cartera original de cada corrida | Storage, `referencias/carteras/{corrida}/` (para volver a descargarla desde Historial) |
 
 El esquema está en `supabase/migrations/`. Las tablas tienen RLS activo sin políticas: sólo el servidor
 con la llave secreta puede leer o escribir.
@@ -49,8 +50,19 @@ Sin llave, la app funciona en **modo local**: guarda la Estructura y el catálog
    de 1 fila por CP (`catalogo_cp` en Supabase o `data/catalogo_cp.parquet` en modo local). Actualícelo al menos una vez al año.
 3. **Pantalla principal**: suba la Cartera; el número de Campaña de Trabajo se infiere del nombre del archivo
    (`…Campaña_19…` → 19) y puede corregirse. Pulse **Generar base**.
-4. Revise el resumen y descargue el **Excel** (hojas *Base de Gestion*, *Revision*, *Resumen*; filas a revisar
-   en amarillo) o el **CSV** (incluye las columnas `requiere_revision` y `motivo_revision`).
+4. Revise el resumen y descargue:
+   - **Cartera con columnas anexadas** (principal): el mismo archivo que se subió, con las mismas hojas,
+     columnas, orden, colores y formato. El sistema llena en su lugar las columnas que ya vienen vacías
+     (REGION, RUTA, DIVISION, ID COBRADOR, Concatenado, Fecha de cierre, Morosidad, Campaña de trabajo,
+     Referencia de Pago) y **anexa al final** las que no existen (Direccion Calle, Colonia,
+     Municipio / Poblacion, Cp, Estado, Zona (Urbano/Rural) y Motivo de revisión). Se agregan las hojas
+     *Revision* y *Resumen*. Sólo para archivos `.xlsx`/`.xlsm`.
+   - **Excel formato estándar** (22 columnas de la especificación) o **CSV**.
+
+**Formato de salida (barra lateral):** color de las columnas que anexa el sistema (azul claro por defecto)
+y la opción de pintar también las columnas de la cartera que llena el sistema. En las filas que requieren
+revisión, las celdas anexadas se marcan en amarillo y el motivo va en *Motivo de revisión*; las celdas
+originales no se tocan.
 
 La carpeta de datos puede cambiarse con la variable de entorno `BASE_CARTERA_DATA_DIR`.
 
