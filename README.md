@@ -17,6 +17,30 @@ streamlit run app.py
 
 La app abre en `http://localhost:8501`.
 
+## Conexión a Supabase
+
+La app guarda todo en el proyecto de Supabase **base-cartera** (`https://irqpuydmkqgvpcbdiydc.supabase.co`):
+
+| Qué | Dónde |
+|---|---|
+| Estructura General de Bases | Storage, bucket privado `referencias` (+ copias en `historial/`) |
+| Catálogo de códigos postales | Tabla `catalogo_cp` |
+| Cada base generada | Tablas `corridas` (resumen) y `base_gestion` (filas, con `requiere_revision`) |
+
+El esquema está en `supabase/migrations/`. Las tablas tienen RLS activo sin políticas: sólo el servidor
+con la llave secreta puede leer o escribir.
+
+**Configurar la llave (una sola vez):**
+
+1. En Supabase: *Project Settings → API Keys* y copie la llave **secret** (`sb_secret_…`) o la legacy **service_role**.
+2. Local: copie `.streamlit/secrets.toml.example` como `.streamlit/secrets.toml` y pegue la llave.
+   En Streamlit Cloud: péguelo en *App settings → Secrets*.
+   (También puede usar las variables de entorno `SUPABASE_URL` y `SUPABASE_KEY`.)
+
+Sin llave, la app funciona en **modo local**: guarda la Estructura y el catálogo en `data/` y no guarda historial.
+
+> El plan Free de Supabase pausa el proyecto tras ~7 días sin actividad; se reactiva desde el panel de Supabase.
+
 ## Uso
 
 1. **Barra lateral → Estructura General de Bases**: suba el archivo y pulse *Guardar*. Se guarda en `data/` y se reutiliza en cada corrida; reemplácelo cuando cambien rutas, zonas, divisiones o el calendario (normalmente cada 14 días).
@@ -30,8 +54,8 @@ La app abre en `http://localhost:8501`.
 
 La carpeta de datos puede cambiarse con la variable de entorno `BASE_CARTERA_DATA_DIR`.
 
-> **Streamlit Community Cloud:** el disco del servidor no es persistente; tras un reinicio habrá que volver a
-> cargar la Estructura y el catálogo. Para uso interno se recomienda ejecutarla en un servidor propio.
+Con Supabase conectado aparece la pestaña **Historial**: permite volver a abrir, descargar o borrar
+cualquier base generada anteriormente, filtrando por Campaña de Trabajo.
 
 ## Lógica implementada (según la especificación)
 
@@ -52,4 +76,5 @@ La carpeta de datos puede cambiarse con la variable de entorno `BASE_CARTERA_DAT
 
 - `app.py` — interfaz Streamlit.
 - `procesamiento.py` — toda la lógica (independiente de Streamlit, reutilizable).
+- `almacenamiento.py` — persistencia en Supabase o en disco local.
 - `tests/` — pruebas: `python -m pytest`.

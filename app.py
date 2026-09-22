@@ -12,80 +12,104 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
+import almacenamiento as alm
 import procesamiento as proc
 
 DATA_DIR = Path(os.environ.get("BASE_CARTERA_DATA_DIR", Path(__file__).parent / "data"))
-RUTA_ESTRUCTURA = DATA_DIR / "Estructura_General_de_Bases.xlsx"
-RUTA_CATALOGO = DATA_DIR / "catalogo_cp.parquet"
 
 st.set_page_config(page_title="Base de Cartera", page_icon="📋", layout="wide")
 
 
 # --------------------------------------------------------------------------
-# Archivos de referencia persistentes
+# Almacenamiento: Supabase si hay credenciales, si no archivos locales
 # --------------------------------------------------------------------------
 
 
-def fecha_archivo(ruta: Path) -> str:
-    return datetime.fromtimestamp(ruta.stat().st_mtime).strftime("%d/%m/%Y %H:%M")
+def credenciales_supabase() -> tuple[str | None, str | None]:
+    url = os.environ.get("SUPABASE_URL")
+    key = os.environ.get("SUPABASE_KEY")
+    try:
+        sec = st.secrets.get("supabase", {})
+        url = sec.get("url", url)
+        key = sec.get("key", key)
+    except Exception:  # noqa: BLE001 - sin secrets.toml
+        pass
+    return url, key
 
 
-@st.cache_data(show_spinner=False)
-def cargar_estructura(ruta: str, _mtime: float) -> proc.EstructuraGeneral:
-    return proc.leer_estructura(Path(ruta).read_bytes())
+@st.cache_resource(show_spinner=False)
+def obtener_almacen(url: str | None, key: str | None):
+    if url and key:
+        return alm.AlmacenSupabase(url, key)
+    return alm.AlmacenLocal(DATA_DIR)
 
 
-@st.cache_data(show_spinner=False)
-def cargar_catalogo(ruta: str, _mtime: float) -> pd.DataFrame:
-    return pd.read_parquet(ruta)
+@st.cache_data(show_spinner="Cargando Estructura General…")
+def cargar_estructura(_almacen, _version) -> proc.EstructuraGeneral | None:
+    contenido = _almacen.leer_estructura()
+    return proc.leer_estructura(contenido) if contenido else None
 
 
-def estructura_actual() -> proc.EstructuraGeneral | None:
-    if not RUTA_ESTRUCTURA.exists():
-        return None
-    return cargar_estructura(str(RUTA_ESTRUCTURA), RUTA_ESTRUCTURA.stat().st_mtime)
+@st.cache_data(show_spinner="Cargando catálogo de códigos postales…")
+def cargar_catalogo(_almacen, _version) -> pd.DataFrame | None:
+    return _almacen.leer_catalogo()
 
 
-def catalogo_actual() -> pd.DataFrame | None:
-    if not RUTA_CATALOGO.exists():
-        return None
-    return cargar_catalogo(str(RUTA_CATALOGO), RUTA_CATALOGO.stat().st_mtime)
+def fmt_fecha(f: datetime | None) -> str:
+    if f is None:
+        return "—"
+    if f.tzinfo is not None:
+        f = f.astimezone()
+    return f.strftime("%d/%m/%Y %H:%M")
+
+
+try:
+    almacen = obtener_almacen(*credenciales_supabase())
+except Exception as e:  # noqa: BLE001
+    st.error(f"No se pudo conectar a Supabase: {e}")
+    st.stop()
 
 
 with st.sidebar:
     st.header("Archivos de referencia")
-    st.caption("Se guardan en la app y se reutilizan en cada corrida. Reemplácelos cuando cambien.")
+    if almacen.nombre == "Supabase":
+        st.caption("🟢 Conectado a Supabase. Los archivos y las bases generadas se guardan en la nube.")
+    else:
+        st.caption("⚪ Modo local (sin Supabase). Configure `.streamlit/secrets.toml` para conectarlo.")
 
     # ---- Estructura General de Bases
     st.subheader("Estructura General de Bases")
     estructura = None
-    if RUTA_ESTRUCTURA.exists():
-        try:
-            estructura = estructura_actual()
-            st.success(f"Cargada ({fecha_archivo(RUTA_ESTRUCTURA)})")
-            st.caption(
-                f"{len(estructura.zonas):,} zonas · Campañas de trabajo: "
-                f"{', '.join(map(str, estructura.campanias_disponibles())) or '—'}"
-            )
-            for adv in estructura.advertencias:
-                st.warning(adv)
-        except Exception as e:  # noqa: BLE001
-            st.error(f"El archivo guardado no es válido: {e}")
-    else:
+    try:
+        fecha_est = almacen.fecha_estructura()
+        if fecha_est is not None:
+            estructura = cargar_estructura(almacen, str(fecha_est))
+    except Exception as e:  # noqa: BLE001
+        st.error(f"No se pudo leer la Estructura guardada: {e}")
+        fecha_est = None
+    if estructura is not None:
+        st.success(f"Cargada ({fmt_fecha(fecha_est)})")
+        st.caption(
+            f"{len(estructura.zonas):,} zonas · Campañas de trabajo: "
+            f"{', '.join(map(str, estructura.campanias_disponibles())) or '—'}"
+        )
+        for adv in estructura.advertencias:
+            st.warning(adv)
+    elif fecha_est is None:
         st.info("Aún no se ha cargado.")
 
     archivo_estructura = st.file_uploader(
-        "Reemplazar Estructura General (.xlsx)", type=["xlsx", "xlsm", "xls"], key="up_estructura"
+        "Reemplazar Estructura General (.xlsx)", type=["xlsx", "xlsm"], key="up_estructura"
     )
-    if archivo_estructura is not None and st.button("Guardar Estructura General", use_container_width=True):
+    if archivo_estructura is not None and st.button("Guardar Estructura General", width="stretch"):
         contenido = archivo_estructura.getvalue()
         try:
             nueva = proc.leer_estructura(contenido)
+            with st.spinner("Guardando…"):
+                almacen.guardar_estructura(contenido)
         except Exception as e:  # noqa: BLE001
-            st.error(f"No se pudo leer el archivo: {e}")
+            st.error(f"No se pudo guardar el archivo: {e}")
         else:
-            DATA_DIR.mkdir(parents=True, exist_ok=True)
-            RUTA_ESTRUCTURA.write_bytes(contenido)
             st.cache_data.clear()
             st.toast(f"Estructura guardada: {len(nueva.zonas):,} zonas.")
             st.rerun()
@@ -95,9 +119,15 @@ with st.sidebar:
     # ---- Catálogo SEPOMEX
     st.subheader("Catálogo de Códigos Postales")
     catalogo = None
-    if RUTA_CATALOGO.exists():
-        catalogo = catalogo_actual()
-        st.success(f"Cargado ({fecha_archivo(RUTA_CATALOGO)})")
+    try:
+        n_cp, fecha_cp = almacen.info_catalogo()
+        if n_cp:
+            catalogo = cargar_catalogo(almacen, f"{n_cp}-{fecha_cp}")
+    except Exception as e:  # noqa: BLE001
+        st.error(f"No se pudo leer el catálogo guardado: {e}")
+        n_cp, fecha_cp = 0, None
+    if catalogo is not None:
+        st.success(f"Cargado ({fmt_fecha(fecha_cp)})")
         st.caption(f"{len(catalogo):,} códigos postales")
     else:
         st.info("Aún no se ha cargado. Descárguelo de correosdemexico.gob.mx (TXT, XLS o ZIP).")
@@ -105,99 +135,30 @@ with st.sidebar:
     archivo_cp = st.file_uploader(
         "Reemplazar catálogo SEPOMEX", type=["txt", "csv", "xls", "xlsx", "zip"], key="up_cp"
     )
-    if archivo_cp is not None and st.button("Guardar catálogo", use_container_width=True):
+    if archivo_cp is not None and st.button("Guardar catálogo", width="stretch"):
         try:
             with st.spinner("Procesando catálogo…"):
                 nuevo = proc.leer_catalogo_cp(archivo_cp.getvalue(), archivo_cp.name)
             if nuevo.empty:
                 raise ValueError("El catálogo no contiene códigos postales válidos.")
+            barra = st.progress(0.0, text="Guardando catálogo…")
+            almacen.guardar_catalogo(nuevo, progreso=lambda x: barra.progress(x, text="Guardando catálogo…"))
         except Exception as e:  # noqa: BLE001
-            st.error(f"No se pudo leer el catálogo: {e}")
+            st.error(f"No se pudo guardar el catálogo: {e}")
         else:
-            DATA_DIR.mkdir(parents=True, exist_ok=True)
-            nuevo.to_parquet(RUTA_CATALOGO, index=False)
             st.cache_data.clear()
             st.toast(f"Catálogo guardado: {len(nuevo):,} códigos postales.")
             st.rerun()
 
 
 # --------------------------------------------------------------------------
-# Corrida
+# Presentación de resultados
 # --------------------------------------------------------------------------
 
-st.title("📋 Base de Gestión por Campaña de Trabajo")
-st.write(
-    "Suba la **Cartera de la campaña**, confirme el número de **Campaña de Trabajo** y genere la base. "
-    "Las filas con información faltante se marcan en amarillo para revisión manual; nunca se eliminan "
-    "ni se completan con datos inventados."
-)
 
-if estructura is None:
-    st.warning("Primero cargue el archivo **Estructura General de Bases** en la barra lateral.")
-    st.stop()
-if catalogo is None:
-    st.warning(
-        "No hay catálogo de códigos postales. Puede generar la base, pero Municipio, Estado y "
-        "Zona (Urbano/Rural) quedarán vacíos y todas las filas se marcarán para revisión."
-    )
-
-archivo_cartera = st.file_uploader(
-    "Cartera de la campaña (ej. Cartera_Campaña_19.xlsx)", type=["xlsx", "xlsm", "xls", "csv"]
-)
-
-inferida = proc.inferir_campania(archivo_cartera.name) if archivo_cartera else None
-col1, col2 = st.columns([1, 3])
-with col1:
-    campania = st.number_input(
-        "Campaña de Trabajo (N)",
-        min_value=1,
-        max_value=99,
-        value=inferida if inferida else None,
-        step=1,
-        placeholder="Ej. 19",
-        key=f"campania_{archivo_cartera.name if archivo_cartera else ''}",
-    )
-with col2:
-    if inferida:
-        st.caption(f"Inferida del nombre del archivo: **{inferida}**. Verifique antes de generar.")
-    disponibles = estructura.campanias_disponibles()
-    if campania and disponibles and int(campania) not in disponibles:
-        st.error(
-            f"La Campaña de Trabajo {int(campania)} no existe en la Estructura General. "
-            f"Disponibles: {', '.join(map(str, disponibles))}."
-        )
-
-generar = st.button(
-    "Generar base", type="primary", disabled=archivo_cartera is None or not campania
-)
-
-if generar:
-    try:
-        with st.spinner("Leyendo cartera…"):
-            cartera = proc.leer_cartera(archivo_cartera.getvalue(), archivo_cartera.name)
-        with st.spinner(f"Procesando {len(cartera):,} cuentas…"):
-            resultado = proc.generar_base(cartera, estructura, catalogo, int(campania))
-            excel = proc.exportar_excel(resultado, int(campania))
-            csv = proc.exportar_csv(resultado)
-    except Exception as e:  # noqa: BLE001
-        st.error(f"No se pudo generar la base: {e}")
-        st.stop()
-    st.session_state["resultado"] = {
-        "resultado": resultado,
-        "excel": excel,
-        "csv": csv,
-        "campania": int(campania),
-    }
-
-if "resultado" in st.session_state:
-    datos = st.session_state["resultado"]
-    resultado: proc.Resultado = datos["resultado"]
-    n = datos["campania"]
+def mostrar_resultado(resultado: proc.Resultado, excel: bytes, csv: bytes, n: int, clave: str) -> None:
     r = resultado.resumen
     total = r["Total de filas procesadas"]
-
-    st.divider()
-    st.subheader(f"Resumen — Campaña de Trabajo {n}")
     for adv in resultado.advertencias:
         st.warning(adv)
 
@@ -223,45 +184,235 @@ if "resultado" in st.session_state:
     d1, d2, _ = st.columns([1, 1, 2])
     d1.download_button(
         "⬇️ Descargar Excel",
-        data=datos["excel"],
+        data=excel,
         file_name=f"Base_Gestion_Campaña_{n}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        mime=alm.MIME_XLSX,
         type="primary",
-        use_container_width=True,
+        width="stretch",
+        key=f"xlsx_{clave}",
     )
     d2.download_button(
         "⬇️ Descargar CSV",
-        data=datos["csv"],
+        data=csv,
         file_name=f"Base_Gestion_Campaña_{n}.csv",
         mime="text/csv",
-        use_container_width=True,
+        width="stretch",
+        key=f"csv_{clave}",
     )
 
     base = resultado.base
     tab_base, tab_rev = st.tabs(["Base de gestión", f"Revisión ({int(base['requiere_revision'].sum()):,})"])
     with tab_base:
-        solo_rev = st.toggle("Mostrar solo filas que requieren revisión")
+        solo_rev = st.toggle("Mostrar solo filas que requieren revisión", key=f"solo_{clave}")
         vista = base[base["requiere_revision"]] if solo_rev else base
-        LIMITE = 2000
-        if len(vista) > LIMITE:
-            st.caption(f"Vista previa de las primeras {LIMITE:,} de {len(vista):,} filas. Descargue el archivo para verlas todas.")
-        vista = vista.head(LIMITE)
+        limite = 2000
+        if len(vista) > limite:
+            st.caption(
+                f"Vista previa de las primeras {limite:,} de {len(vista):,} filas. "
+                "Descargue el archivo para verlas todas."
+            )
+        vista = vista.head(limite)
         estilo = vista.style.apply(
             lambda fila: ["background-color: #fff3a0; color: black" if fila["requiere_revision"] else "" for _ in fila],
             axis=1,
-        ).format({"Fecha de cierre": lambda v: v.strftime("%d/%m/%Y") if hasattr(v, "strftime") else ("" if v is None else v)})
-        st.dataframe(estilo, use_container_width=True, hide_index=True)
+        ).format(
+            {"Fecha de cierre": lambda v: v.strftime("%d/%m/%Y") if hasattr(v, "strftime") else ("" if v is None else v)}
+        )
+        st.dataframe(estilo, width="stretch", hide_index=True)
     with tab_rev:
         rev = base[base["requiere_revision"]]
         if rev.empty:
             st.success("Todas las filas se completaron sin observaciones.")
         else:
             conteo = (
-                rev["motivo_revision"].str.split("; ").explode().value_counts().rename_axis("Motivo").reset_index(name="Filas")
+                rev["motivo_revision"].str.split("; ").explode().value_counts()
+                .rename_axis("Motivo").reset_index(name="Filas")
             )
-            st.dataframe(conteo, hide_index=True, use_container_width=True)
+            st.dataframe(conteo, hide_index=True, width="stretch")
             st.dataframe(
                 rev[["NoDama", "ZONA", "RUTA", "CampaniaSaldo", "Direccion", "Cp", "motivo_revision"]],
                 hide_index=True,
-                use_container_width=True,
+                width="stretch",
             )
+
+
+# --------------------------------------------------------------------------
+# Generar base
+# --------------------------------------------------------------------------
+
+
+def pantalla_generar() -> None:
+    st.write(
+        "Suba la **Cartera de la campaña**, confirme el número de **Campaña de Trabajo** y genere la base. "
+        "Las filas con información faltante se marcan en amarillo para revisión manual; nunca se eliminan "
+        "ni se completan con datos inventados."
+    )
+    if estructura is None:
+        st.warning("Primero cargue el archivo **Estructura General de Bases** en la barra lateral.")
+        return
+    if catalogo is None:
+        st.warning(
+            "No hay catálogo de códigos postales. Puede generar la base, pero Municipio, Estado y "
+            "Zona (Urbano/Rural) quedarán vacíos y todas las filas se marcarán para revisión."
+        )
+
+    archivo_cartera = st.file_uploader(
+        "Cartera de la campaña (ej. Cartera_Campaña_19.xlsx)", type=["xlsx", "xlsm", "xls", "csv"]
+    )
+
+    inferida = proc.inferir_campania(archivo_cartera.name) if archivo_cartera else None
+    col1, col2 = st.columns([1, 3])
+    with col1:
+        campania = st.number_input(
+            "Campaña de Trabajo (N)",
+            min_value=1,
+            max_value=99,
+            value=inferida if inferida else None,
+            step=1,
+            placeholder="Ej. 19",
+            key=f"campania_{archivo_cartera.name if archivo_cartera else ''}",
+        )
+    with col2:
+        if inferida:
+            st.caption(f"Inferida del nombre del archivo: **{inferida}**. Verifique antes de generar.")
+        disponibles = estructura.campanias_disponibles()
+        if campania and disponibles and int(campania) not in disponibles:
+            st.error(
+                f"La Campaña de Trabajo {int(campania)} no existe en la Estructura General. "
+                f"Disponibles: {', '.join(map(str, disponibles))}."
+            )
+
+    guardar = False
+    if almacen.guarda_historial:
+        guardar = st.checkbox("Guardar esta base en Supabase", value=True)
+
+    if st.button("Generar base", type="primary", disabled=archivo_cartera is None or not campania):
+        try:
+            with st.spinner("Leyendo cartera…"):
+                cartera = proc.leer_cartera(archivo_cartera.getvalue(), archivo_cartera.name)
+            with st.spinner(f"Procesando {len(cartera):,} cuentas…"):
+                resultado = proc.generar_base(cartera, estructura, catalogo, int(campania))
+                excel = proc.exportar_excel(resultado, int(campania))
+                csv = proc.exportar_csv(resultado)
+        except Exception as e:  # noqa: BLE001
+            st.error(f"No se pudo generar la base: {e}")
+            return
+        corrida_id = None
+        if guardar:
+            barra = st.progress(0.0, text="Guardando en Supabase…")
+            try:
+                corrida_id = almacen.guardar_corrida(
+                    resultado,
+                    int(campania),
+                    archivo_cartera.name,
+                    progreso=lambda x: barra.progress(x, text="Guardando en Supabase…"),
+                )
+            except Exception as e:  # noqa: BLE001
+                st.error(f"La base se generó, pero no se pudo guardar en Supabase: {e}")
+            finally:
+                barra.empty()
+        st.session_state["resultado"] = {
+            "resultado": resultado,
+            "excel": excel,
+            "csv": csv,
+            "campania": int(campania),
+            "corrida_id": corrida_id,
+        }
+
+    if "resultado" in st.session_state:
+        datos = st.session_state["resultado"]
+        st.divider()
+        st.subheader(f"Resumen — Campaña de Trabajo {datos['campania']}")
+        if datos.get("corrida_id"):
+            st.caption(f"✅ Guardada en Supabase como corrida #{datos['corrida_id']}.")
+        mostrar_resultado(datos["resultado"], datos["excel"], datos["csv"], datos["campania"], "actual")
+
+
+# --------------------------------------------------------------------------
+# Historial (sólo Supabase)
+# --------------------------------------------------------------------------
+
+
+@st.cache_data(show_spinner="Descargando base guardada…", max_entries=5)
+def cargar_corrida(_almacen, corrida_id: int):
+    resultado, n = _almacen.leer_corrida(corrida_id)
+    return resultado, n, proc.exportar_excel(resultado, n), proc.exportar_csv(resultado)
+
+
+def pantalla_historial() -> None:
+    try:
+        corridas = almacen.listar_corridas()
+    except Exception as e:  # noqa: BLE001
+        st.error(f"No se pudo leer el historial: {e}")
+        return
+    if corridas.empty:
+        st.info("Todavía no hay bases guardadas.")
+        return
+
+    corridas["creado_en"] = pd.to_datetime(corridas["creado_en"]).dt.tz_convert(None)
+    campanias = sorted(corridas["campania_trabajo"].unique(), reverse=True)
+    filtro = st.selectbox("Campaña de Trabajo", ["Todas"] + [int(c) for c in campanias])
+    if filtro != "Todas":
+        corridas = corridas[corridas["campania_trabajo"] == filtro]
+
+    columnas = ["id", "campania_trabajo", "archivo_cartera", "total_filas", "filas_revision", "creado_en"]
+    tabla = corridas[columnas].rename(
+        columns={
+            "id": "Corrida",
+            "campania_trabajo": "Campaña",
+            "archivo_cartera": "Archivo",
+            "total_filas": "Filas",
+            "filas_revision": "En revisión",
+            "creado_en": "Generada (UTC)",
+        }
+    )
+    st.dataframe(tabla, hide_index=True, width="stretch")
+
+    opciones = corridas["id"].tolist()
+    elegido = st.selectbox(
+        "Abrir corrida",
+        opciones,
+        format_func=lambda i: (
+            lambda c: f"#{i} · Campaña {c.campania_trabajo} · {c.archivo_cartera or ''} · "
+            f"{c.creado_en:%d/%m/%Y %H:%M}"
+        )(corridas.set_index("id").loc[i]),
+    )
+    c1, c2, _ = st.columns([1, 1, 3])
+    abrir = c1.button("Ver / descargar", type="primary", width="stretch")
+    if c2.button("🗑️ Borrar corrida", width="stretch"):
+        st.session_state["confirmar_borrado"] = elegido
+    if st.session_state.get("confirmar_borrado") == elegido:
+        st.warning(f"¿Borrar definitivamente la corrida #{elegido} y todas sus filas?")
+        b1, b2, _ = st.columns([1, 1, 3])
+        if b1.button("Sí, borrar", type="primary"):
+            almacen.borrar_corrida(int(elegido))
+            st.session_state.pop("confirmar_borrado", None)
+            st.cache_data.clear()
+            st.rerun()
+        if b2.button("Cancelar"):
+            st.session_state.pop("confirmar_borrado", None)
+            st.rerun()
+
+    if abrir:
+        st.session_state["historial_abierto"] = int(elegido)
+    abierto = st.session_state.get("historial_abierto")
+    if abierto in opciones:
+        try:
+            resultado, n, excel, csv = cargar_corrida(almacen, abierto)
+        except Exception as e:  # noqa: BLE001
+            st.error(f"No se pudo leer la corrida: {e}")
+            return
+        st.divider()
+        st.subheader(f"Corrida #{abierto} — Campaña de Trabajo {n}")
+        mostrar_resultado(resultado, excel, csv, n, f"hist_{abierto}")
+
+
+st.title("📋 Base de Gestión por Campaña de Trabajo")
+if almacen.guarda_historial:
+    tab_generar, tab_historial = st.tabs(["Generar base", "Historial"])
+    with tab_generar:
+        pantalla_generar()
+    with tab_historial:
+        pantalla_historial()
+else:
+    pantalla_generar()

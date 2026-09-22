@@ -4,3 +4,4 @@ __pycache__/
 .venv/
 # Archivos de referencia cargados desde la app (datos internos)
 data/
+.streamlit/secrets.toml
