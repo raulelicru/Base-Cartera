@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+# Archivos de referencia cargados desde la app (datos internos)
+data/
