@@ -43,10 +43,10 @@ Sin llave, la app funciona en **modo local**: guarda la Estructura y el catálog
 
 ## Uso
 
-1. **Barra lateral → Estructura General de Bases**: suba el archivo y pulse *Guardar*. Se guarda en `data/` y se reutiliza en cada corrida; reemplácelo cuando cambien rutas, zonas, divisiones o el calendario (normalmente cada 14 días).
+1. **Barra lateral → Estructura General de Bases**: suba el archivo y pulse *Guardar*. Se guarda (en Supabase, o en `data/` en modo local) y se reutiliza en cada corrida; reemplácelo cuando cambien rutas, zonas, divisiones o el calendario (normalmente cada 14 días).
 2. **Barra lateral → Catálogo de Códigos Postales**: descargue el catálogo oficial de Correos de México
-   (correosdemexico.gob.mx, formato TXT, XLS o el ZIP tal cual) y súbalo. Se convierte a una tabla local
-   de 1 fila por CP (`data/catalogo_cp.parquet`). Actualícelo al menos una vez al año.
+   (correosdemexico.gob.mx, formato TXT, XLS o el ZIP tal cual) y súbalo. Se convierte a una tabla
+   de 1 fila por CP (`catalogo_cp` en Supabase o `data/catalogo_cp.parquet` en modo local). Actualícelo al menos una vez al año.
 3. **Pantalla principal**: suba la Cartera; el número de Campaña de Trabajo se infiere del nombre del archivo
    (`…Campaña_19…` → 19) y puede corregirse. Pulse **Generar base**.
 4. Revise el resumen y descargue el **Excel** (hojas *Base de Gestion*, *Revision*, *Resumen*; filas a revisar
