@@ -60,7 +60,7 @@ Sin llave, la app funciona en **modo local**: guarda la Estructura y el catálog
    - **Excel formato estándar** (22 columnas de la especificación) o **CSV**.
 
 **Formato de salida (barra lateral):** color de las columnas que anexa el sistema (azul claro por defecto)
-y la opción de pintar también las columnas de la cartera que llena el sistema. En las filas que requieren
+y la opción (activada por defecto) de pintar también las columnas que ya venían vacías en la cartera y llena el sistema. En las filas que requieren
 revisión, las celdas anexadas se marcan en amarillo y el motivo va en *Motivo de revisión*; las celdas
 originales no se tocan.
 

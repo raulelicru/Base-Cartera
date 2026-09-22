@@ -16,6 +16,7 @@ import streamlit as st
 import almacenamiento as alm
 import procesamiento as proc
 
+VERSION = "23/09/2026 · salida sobre la cartera original"
 DATA_DIR = Path(os.environ.get("BASE_CARTERA_DATA_DIR", Path(__file__).parent / "data"))
 
 st.set_page_config(page_title="Base de Cartera", page_icon="📋", layout="wide")
@@ -72,6 +73,7 @@ except Exception as e:  # noqa: BLE001
 
 
 with st.sidebar:
+    st.caption(f"Versión de la app: {VERSION}")
     st.header("Archivos de referencia")
     if almacen.nombre == "Supabase":
         st.caption("🟢 Conectado a Supabase. Los archivos y las bases generadas se guardan en la nube.")
@@ -163,8 +165,8 @@ with st.sidebar:
         "Color de las columnas que agrega el sistema", value=proc.COLOR_SISTEMA, key="color_sistema"
     )
     colorear_llenadas = st.checkbox(
-        "Pintar también las columnas de la cartera que llena el sistema",
-        value=False,
+        "Pintar también las columnas que ya venían vacías en la cartera y llena el sistema",
+        value=True,
         key="colorear_llenadas",
         help="REGION, RUTA, DIVISION, ID COBRADOR, Concatenado, Fecha de cierre, Morosidad, "
         "Campaña de trabajo y Referencia de Pago, cuando ya vienen como columnas vacías en la cartera.",
@@ -219,45 +221,51 @@ def mostrar_resultado(resultado: proc.Resultado, n: int, clave: str, original: t
     excel_original, excel_estandar, csv = archivos_descarga(
         clave, resultado, original, n, color_sistema, colorear_llenadas
     )
-    d1, d2, d3 = st.columns([3, 2, 2])
     if isinstance(excel_original, bytes):
-        nombre_original = original[1]
-        base_nombre, _, ext = nombre_original.rpartition(".")
-        d1.download_button(
-            "⬇️ Descargar cartera con columnas anexadas",
+        base_nombre, _, ext = original[1].rpartition(".")
+        st.download_button(
+            "⬇️ Descargar Excel (su cartera + columnas del sistema)",
             data=excel_original,
             file_name=f"{base_nombre}_Base_Gestion.{ext}",
             mime=alm.MIME_XLSX if ext.lower() == "xlsx" else "application/vnd.ms-excel.sheet.macroEnabled.12",
             type="primary",
-            width="stretch",
             key=f"orig_{clave}",
         )
+        st.caption(
+            "Sale igual que la cartera enviada (mismas columnas, orden y colores). Las columnas que pone el "
+            "sistema van en el color elegido en **Formato de salida**; las filas a revisar, en amarillo."
+        )
+    elif isinstance(excel_original, Exception):
+        st.error(f"No se pudo conservar el formato de la cartera: {excel_original}")
+    elif original is None:
+        st.warning("Esta corrida no tiene guardado el archivo original; sólo está disponible el formato estándar.")
     else:
-        if isinstance(excel_original, Exception):
-            d1.warning(f"No se pudo conservar el formato original: {excel_original}")
-        elif original is None:
-            d1.caption("No está disponible el archivo original de esta corrida; descargue el formato estándar.")
-        else:
-            d1.caption("El formato original sólo se conserva con archivos .xlsx/.xlsm; descargue el formato estándar.")
-    d2.download_button(
-        "⬇️ Excel formato estándar (22 columnas)",
-        data=excel_estandar,
-        file_name=f"Base_Gestion_Campaña_{n}.xlsx",
-        mime=alm.MIME_XLSX,
-        width="stretch",
-        key=f"xlsx_{clave}",
-    )
-    d3.download_button(
-        "⬇️ CSV",
-        data=csv,
-        file_name=f"Base_Gestion_Campaña_{n}.csv",
-        mime="text/csv",
-        width="stretch",
-        key=f"csv_{clave}",
-    )
+        st.warning(
+            "Para que el Excel salga igual que la cartera enviada, súbala como **.xlsx** "
+            "(ábrala en Excel y use *Guardar como → Libro de Excel (.xlsx)*)."
+        )
+
+    with st.expander("Otros formatos (formato estándar de 22 columnas, CSV)", expanded=not isinstance(excel_original, bytes)):
+        o1, o2, _ = st.columns([2, 1, 2])
+        o1.download_button(
+            "Excel formato estándar (22 columnas)",
+            data=excel_estandar,
+            file_name=f"Base_Gestion_Estandar_Campaña_{n}.xlsx",
+            mime=alm.MIME_XLSX,
+            width="stretch",
+            key=f"xlsx_{clave}",
+        )
+        o2.download_button(
+            "CSV",
+            data=csv,
+            file_name=f"Base_Gestion_Estandar_Campaña_{n}.csv",
+            mime="text/csv",
+            width="stretch",
+            key=f"csv_{clave}",
+        )
 
     base = resultado.base.drop(columns=["_fila_excel"], errors="ignore")
-    tab_base, tab_rev = st.tabs(["Base de gestión", f"Revisión ({int(base['requiere_revision'].sum()):,})"])
+    tab_base, tab_rev = st.tabs(["Vista previa de datos calculados", f"Revisión ({int(base['requiere_revision'].sum()):,})"])
     with tab_base:
         solo_rev = st.toggle("Mostrar solo filas que requieren revisión", key=f"solo_{clave}")
         vista = base[base["requiere_revision"]] if solo_rev else base
@@ -315,6 +323,11 @@ def pantalla_generar() -> None:
     archivo_cartera = st.file_uploader(
         "Cartera de la campaña (ej. Cartera_Campaña_19.xlsx)", type=["xlsx", "xlsm", "xls", "csv"]
     )
+    if archivo_cartera is not None and not proc.es_excel_openpyxl(archivo_cartera.name):
+        st.warning(
+            "Este archivo no es .xlsx: la base se puede generar, pero **no** podrá salir con el mismo formato y "
+            "colores de la cartera. Para conservarlos, guárdela en Excel como *Libro de Excel (.xlsx)*."
+        )
 
     inferida = proc.inferir_campania(archivo_cartera.name) if archivo_cartera else None
     col1, col2 = st.columns([1, 3])
