@@ -18,7 +18,8 @@ def _cartera_xlsx(con_extras=True) -> bytes:
     ws.title = "BASE"
     enc = ["ZONA", "NoDama", "Direccion", "Referencia", "AnioSaldo", "CampaniaSaldo", "DigitoVerificador"]
     if con_extras:
-        enc += ["NOMBRE", "IMPORTE NETO FACTURA", "TELEFONO CELULAR", "DescSituacionCie"]
+        # Nombres como vienen en la cartera real (TelefonoCelular está en la columna W)
+        enc += ["NOMBRE", "SaldoDama", "DescSituacionCie", "ImporteOtro"] + [f"X{i}" for i in range(11)] + ["TelefonoCelular"]
     ws.append(enc)
     filas = [
         [101, 7241893, "JOSE ALFREDO JIMENEZ No 11 Mza 37 Lt 11 COLONIA FORESTAL CP 7140",
@@ -26,8 +27,8 @@ def _cartera_xlsx(con_extras=True) -> bytes:
         [None] * 7,
         [102, 2312748, "JOSE MIJICA Mza 51 Lt 473 LA FORESTAL CP 7140", "MIMI DERBA Y JORGE NEGRETE", 2025, 18, 3],
     ]
-    extras = [["CARMEN DELIA HERNANDEZ SANTOS", 459, 5512345678, "ACTIVA"], [None] * 4,
-              ["KARINA TAPIA RAMIREZ", 738, None, "SUSPENDIDA"]]
+    extras = [["CARMEN DELIA HERNANDEZ SANTOS", 459, "ACTIVA", 1] + [None] * 11 + [5512345678], [None] * 16,
+              ["KARINA TAPIA RAMIREZ", 738, "SUSPENDIDA", 2] + [None] * 11 + [None]]
     for f, e in zip(filas, extras):
         ws.append(f + (e if con_extras else []))
     buf = io.BytesIO()
@@ -54,7 +55,7 @@ def test_tabla_visitas_completa():
         "NoDama": 7241893,
         "DIGITO VERIFICADOR": 2,
         "NOMBRE": "CARMEN DELIA HERNANDEZ SANTOS",
-        "DIRECCION": "JOSE ALFREDO JIMENEZ No 11 Mza 37 Lt 11 COLONIA FORESTAL CP 7140",
+        "DIRECCION": "Jose Alfredo Jimenez No. 11 Mz 37 L- 11",
         "COLONIA": "FORESTAL",
         "CP Extraido": 7140,
         "LOCALIDAD": "GUSTAVO A MADERO",
@@ -70,6 +71,11 @@ def test_tabla_visitas_completa():
     # Todas las columnas llenas excepto ASIGNACION (y el teléfono que no venía en la cartera)
     vacias = {c for c in proc.COLUMNAS_VISITAS if t[c].isna().all()}
     assert vacias == {"ASIGNACION"}
+
+
+def test_telefono_en_columna_w():
+    cartera, _ = _resultado(_cartera_xlsx())
+    assert list(cartera.columns).index("TelefonoCelular") == 22  # columna W
 
 
 def test_visitas_sin_columnas_extra_avisa():
@@ -93,3 +99,18 @@ def test_exportar_visitas_usa_plantilla():
     assert ws["H2"].fill.fgColor.rgb == "FFFFFF00" and ws["J3"].fill.fgColor.rgb == "FFFFFF00"
     assert ws["A1"].fill.fgColor.theme == 9
     assert ws.column_dimensions["G"].width > 80
+
+
+def test_visitas_rapido_con_muchas_filas():
+    import time
+
+    cartera, res = _resultado(_cartera_xlsx())
+    grande = proc.Resultado(
+        base=pd.concat([res.base] * 15000, ignore_index=True).assign(_fila_excel=None),
+        resumen=res.resumen, advertencias=[],
+    )
+    inicio = time.perf_counter()
+    t = proc.tabla_visitas(grande, None, date(2026, 9, 24))
+    proc.exportar_visitas(t, date(2026, 9, 24))
+    assert len(t) == 30000
+    assert time.perf_counter() - inicio < 30

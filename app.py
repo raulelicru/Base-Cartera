@@ -16,7 +16,7 @@ import streamlit as st
 import almacenamiento as alm
 import procesamiento as proc
 
-VERSION = "23/09/2026 · base para visitas"
+VERSION = "23/09/2026 · visitas v2 (SaldoDama, TelefonoCelular)"
 DATA_DIR = Path(os.environ.get("BASE_CARTERA_DATA_DIR", Path(__file__).parent / "data"))
 
 st.set_page_config(page_title="Base de Cartera", page_icon="📋", layout="wide")
@@ -215,15 +215,19 @@ def archivo_visitas(clave: str, _resultado, _cartera, fecha, zonas: tuple):
 def seccion_visitas(resultado: proc.Resultado, clave: str, original) -> None:
     st.markdown("#### 🚶 Base para visitas de gestores")
     st.caption(
-        "Mismo formato de la base de visitas. Todas las columnas salen llenas con los datos de la base; "
-        "sólo **ASIGNACION** va en blanco para asignar al gestor."
+        "Mismo formato de la base de visitas. Todas las columnas salen llenas con los datos de la base "
+        "(DIRECCION = dirección generada por el sistema, IMPORTE NETO FACTURA = SaldoDama, "
+        "TELEFONO CELULAR = TelefonoCelular); sólo **ASIGNACION** va en blanco para asignar al gestor."
     )
     cartera = cartera_original(clave, original)
     faltantes = proc.columnas_visitas_faltantes(cartera)
     if faltantes:
         st.warning(
-            "La cartera subida no trae las columnas **" + ", ".join(faltantes) + "**, por eso saldrán vacías en la "
-            "base de visitas. Inclúyalas en la cartera (con esos nombres) para que se llenen."
+            "La cartera subida no trae las columnas **"
+            + ", ".join(proc.FUENTE_VISITAS[f] for f in faltantes)
+            + "**, por eso "
+            + ", ".join(faltantes)
+            + " saldrán vacías en la base de visitas. Inclúyalas en la cartera (con esos nombres) para que se llenen."
         )
     v1, v2, v3 = st.columns([1, 2, 2])
     fecha = v1.date_input("Fecha de asignación", value=date.today(), format="DD/MM/YYYY", key=f"fv_{clave}")

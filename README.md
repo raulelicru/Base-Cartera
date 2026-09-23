@@ -66,15 +66,18 @@ columnas salen llenas y sólo **ASIGNACION** va en blanco:
 | Columna | Origen |
 |---|---|
 | FECHA DE ASIGNACION | Fecha elegida en la app (hoy por defecto) |
-| ZONA, NoDama, DIGITO VERIFICADOR, DIRECCION, REFERENCIA | Cartera |
-| NOMBRE, IMPORTE NETO FACTURA, TELEFONO CELULAR, DescSituacionCie | Cartera (columnas con esos nombres) |
+| ZONA, NoDama, DIGITO VERIFICADOR, REFERENCIA | Cartera |
+| DIRECCION | Dirección generada por el sistema (*Direccion Calle*); si no se pudo armar, la original |
+| NOMBRE, DescSituacionCie | Cartera (columnas con esos nombres) |
+| IMPORTE NETO FACTURA | Columna **SaldoDama** de la cartera |
+| TELEFONO CELULAR | Columna **TelefonoCelular** de la cartera (columna W) |
 | COLONIA | Colonia extraída de la dirección, sin el prefijo "COLONIA" |
 | CP Extraido | CP extraído (numérico) |
 | LOCALIDAD | Municipio del catálogo de CP, en mayúsculas |
 | TEMPORALIDAD | `Mora {Morosidad}` |
 | CAMPANA | `{AnioSaldo}{CampaniaSaldo a 2 dígitos}` (ej. 202512) |
 
-Se puede filtrar por zonas. Si la cartera no trae alguna de las columnas de la tercera fila, la app lo avisa.
+Se puede filtrar por zonas. Los nombres de columna se reconocen sin importar mayúsculas, acentos o espacios. Si la cartera no trae NOMBRE, SaldoDama, TelefonoCelular o DescSituacionCie, la app lo avisa.
 
 **Formato de salida (barra lateral):** color de las columnas que anexa el sistema (azul claro por defecto)
 y la opción (activada por defecto) de pintar también las columnas que ya venían vacías en la cartera y llena el sistema. En las filas que requieren

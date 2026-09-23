@@ -919,20 +919,35 @@ COLUMNAS_VISITAS = [
     "DescSituacionCie",
 ]
 
-# Columnas de visitas que se toman directo de la cartera (nombres aceptados, ya normalizados)
+# Columnas de visitas que se toman directo de la cartera: nombres aceptados en orden de
+# preferencia (se comparan sin acentos, mayúsculas, espacios ni signos: "SaldoDama" = "Saldo Dama").
 CAMPOS_CARTERA_VISITAS = {
-    "NOMBRE": ["nombre", "nombre cliente", "nombre completo", "nombre dama", "cliente"],
-    "IMPORTE NETO FACTURA": ["importe neto factura", "importe neto", "importe factura", "importe"],
-    "TELEFONO CELULAR": ["telefono celular", "celular", "tel celular", "telefono"],
-    "DescSituacionCie": ["descsituacioncie", "desc situacion cie", "situacion cie", "descsituacion"],
+    "NOMBRE": ["nombre", "nombrecliente", "nombrecompleto", "nombredama", "cliente"],
+    "IMPORTE NETO FACTURA": ["saldodama", "importenetofactura", "importeneto", "importefactura"],
+    "TELEFONO CELULAR": ["telefonocelular", "celular", "telcelular"],
+    "DescSituacionCie": ["descsituacioncie", "situacioncie", "descsituacion"],
+}
+# Nombre de la columna de la cartera que se muestra en los avisos
+FUENTE_VISITAS = {
+    "NOMBRE": "NOMBRE",
+    "IMPORTE NETO FACTURA": "SaldoDama",
+    "TELEFONO CELULAR": "TelefonoCelular",
+    "DescSituacionCie": "DescSituacionCie",
 }
 
 MESES = ["ENE", "FEB", "MAR", "ABR", "MAY", "JUN", "JUL", "AGO", "SEP", "OCT", "NOV", "DIC"]
 RE_PREFIJO_COLONIA = re.compile(r"^(COLONIA|COL)\b\.?\s*", re.IGNORECASE)
 
 
+def _compacto(valor) -> str:
+    return normalizar_texto(valor).replace(" ", "")
+
+
 def _columna_cartera(columnas, candidatos) -> str | None:
-    norm = {normalizar_texto(c): c for c in columnas if not str(c).startswith("_")}
+    norm = {}
+    for c in columnas:
+        if not str(c).startswith("_"):
+            norm.setdefault(_compacto(c), c)
     for cand in candidatos:
         if cand in norm:
             return norm[cand]
@@ -1008,8 +1023,8 @@ def tabla_visitas(
 
     fecha = pd.Timestamp(fecha_asignacion).to_pydatetime() if fecha_asignacion is not None else None
     filas = []
-    for i, f in enumerate(base.to_dict("records")):
-        extra = extras.iloc[i].to_dict() if len(extras.columns) else {}
+    registros_extra = extras.to_dict("records") if len(extras.columns) else [{}] * len(base)
+    for f, extra in zip(base.to_dict("records"), registros_extra):
         filas.append(
             {
                 "FECHA DE ASIGNACION": fecha,
@@ -1018,7 +1033,8 @@ def tabla_visitas(
                 "NoDama": f["NoDama"],
                 "DIGITO VERIFICADOR": f["DigitoVerificador"],
                 "NOMBRE": extra.get("NOMBRE"),
-                "DIRECCION": f["Direccion"],
+                # Dirección que genera el sistema (Direccion Calle); si no se pudo armar, la original
+                "DIRECCION": f["Direccion Calle"] or f["Direccion"],
                 "COLONIA": _colonia_visitas(f["Colonia"]),
                 "CP Extraido": _cp_numero(f["Cp"]),
                 "LOCALIDAD": _localidad(f["Municipio / Poblacion"]),
@@ -1053,17 +1069,13 @@ def exportar_visitas(tabla: pd.DataFrame, fecha_asignacion=None) -> bytes:
     encabezados = [c.value for c in ws[1]]
     if encabezados[: len(COLUMNAS_VISITAS)] != COLUMNAS_VISITAS:
         raise ValueError("La plantilla de visitas no coincide con las columnas esperadas.")
-    modelo = {c.column: c for c in ws[2]}
-    estilos = {
-        col: (copy(m.font), copy(m.fill), copy(m.border), copy(m.alignment), m.number_format, copy(m.protection))
-        for col, m in modelo.items()
-    }
+    # Estilo de la fila modelo (fila 2 de la plantilla); copiar el índice de estilo es mucho más
+    # rápido que copiar fuente, relleno, bordes, etc. celda por celda.
+    estilos = {c.column: c._style for c in ws[2]}
     for i, fila in enumerate(tabla[COLUMNAS_VISITAS].itertuples(index=False), start=2):
         for j, valor in enumerate(fila, start=1):
             celda = ws.cell(row=i, column=j, value=valor_limpio(valor))
-            font, fill, border, alignment, fmt, protection = estilos[j]
-            celda.font, celda.fill, celda.border = copy(font), copy(fill), copy(border)
-            celda.alignment, celda.number_format, celda.protection = copy(alignment), fmt, copy(protection)
+            celda._style = copy(estilos[j])
     salida = io.BytesIO()
     wb.save(salida)
     return salida.getvalue()
