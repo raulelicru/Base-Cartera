@@ -59,6 +59,23 @@ Sin llave, la app funciona en **modo local**: guarda la Estructura y el catálog
      *Revision* y *Resumen*. Sólo para archivos `.xlsx`/`.xlsm`.
    - **Excel formato estándar** (22 columnas de la especificación) o **CSV**.
 
+**Base para visitas de gestores:** debajo de las descargas se genera la base de visitas con el mismo formato
+de la plantilla `plantillas/Base_para_visitas.xlsx` (encabezado, colores, anchos y fecha `d-mmm`). Todas las
+columnas salen llenas y sólo **ASIGNACION** va en blanco:
+
+| Columna | Origen |
+|---|---|
+| FECHA DE ASIGNACION | Fecha elegida en la app (hoy por defecto) |
+| ZONA, NoDama, DIGITO VERIFICADOR, DIRECCION, REFERENCIA | Cartera |
+| NOMBRE, IMPORTE NETO FACTURA, TELEFONO CELULAR, DescSituacionCie | Cartera (columnas con esos nombres) |
+| COLONIA | Colonia extraída de la dirección, sin el prefijo "COLONIA" |
+| CP Extraido | CP extraído (numérico) |
+| LOCALIDAD | Municipio del catálogo de CP, en mayúsculas |
+| TEMPORALIDAD | `Mora {Morosidad}` |
+| CAMPANA | `{AnioSaldo}{CampaniaSaldo a 2 dígitos}` (ej. 202512) |
+
+Se puede filtrar por zonas. Si la cartera no trae alguna de las columnas de la tercera fila, la app lo avisa.
+
 **Formato de salida (barra lateral):** color de las columnas que anexa el sistema (azul claro por defecto)
 y la opción (activada por defecto) de pintar también las columnas que ya venían vacías en la cartera y llena el sistema. En las filas que requieren
 revisión, las celdas anexadas se marcan en amarillo y el motivo va en *Motivo de revisión*; las celdas

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import os
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 import pandas as pd
@@ -16,7 +16,7 @@ import streamlit as st
 import almacenamiento as alm
 import procesamiento as proc
 
-VERSION = "23/09/2026 · salida sobre la cartera original"
+VERSION = "23/09/2026 · base para visitas"
 DATA_DIR = Path(os.environ.get("BASE_CARTERA_DATA_DIR", Path(__file__).parent / "data"))
 
 st.set_page_config(page_title="Base de Cartera", page_icon="📋", layout="wide")
@@ -193,6 +193,56 @@ def archivos_descarga(clave: str, _resultado, _original, n: int, color: str, col
     return original, proc.exportar_excel(_resultado, n), proc.exportar_csv(_resultado)
 
 
+@st.cache_data(show_spinner=False, max_entries=6)
+def cartera_original(clave: str, _original):
+    """Cartera completa (todas sus columnas) leída del archivo original, o None."""
+    if _original is None:
+        return None
+    try:
+        return proc.leer_cartera(_original[0], _original[1])
+    except Exception:  # noqa: BLE001
+        return None
+
+
+@st.cache_data(show_spinner="Preparando base de visitas…", max_entries=6)
+def archivo_visitas(clave: str, _resultado, _cartera, fecha, zonas: tuple):
+    tabla = proc.tabla_visitas(_resultado, _cartera, fecha)
+    if zonas:
+        tabla = tabla[tabla["ZONA"].map(proc.clave).isin(zonas)]
+    return proc.exportar_visitas(tabla, fecha), len(tabla)
+
+
+def seccion_visitas(resultado: proc.Resultado, clave: str, original) -> None:
+    st.markdown("#### 🚶 Base para visitas de gestores")
+    st.caption(
+        "Mismo formato de la base de visitas. Todas las columnas salen llenas con los datos de la base; "
+        "sólo **ASIGNACION** va en blanco para asignar al gestor."
+    )
+    cartera = cartera_original(clave, original)
+    faltantes = proc.columnas_visitas_faltantes(cartera)
+    if faltantes:
+        st.warning(
+            "La cartera subida no trae las columnas **" + ", ".join(faltantes) + "**, por eso saldrán vacías en la "
+            "base de visitas. Inclúyalas en la cartera (con esos nombres) para que se llenen."
+        )
+    v1, v2, v3 = st.columns([1, 2, 2])
+    fecha = v1.date_input("Fecha de asignación", value=date.today(), format="DD/MM/YYYY", key=f"fv_{clave}")
+    zonas_disp = sorted({proc.clave(z) for z in resultado.base["ZONA"] if proc.clave(z)}, key=lambda z: (len(z), z))
+    zonas = v2.multiselect("Zonas", zonas_disp, key=f"zv_{clave}", placeholder="Todas las zonas")
+    contenido, n_filas = archivo_visitas(clave, resultado, cartera, fecha, tuple(zonas))
+    v3.markdown("<div style='height:1.75rem'></div>", unsafe_allow_html=True)
+    v3.download_button(
+        f"⬇️ Descargar base para visitas ({n_filas:,} cuentas)",
+        data=contenido,
+        file_name=f"Base_para_visitas_{fecha:%d-%m-%Y}.xlsx",
+        mime=alm.MIME_XLSX,
+        width="stretch",
+        key=f"vis_{clave}",
+        disabled=n_filas == 0,
+    )
+    st.divider()
+
+
 def mostrar_resultado(resultado: proc.Resultado, n: int, clave: str, original: tuple[bytes, str] | None) -> None:
     r = resultado.resumen
     total = r["Total de filas procesadas"]
@@ -263,6 +313,8 @@ def mostrar_resultado(resultado: proc.Resultado, n: int, clave: str, original: t
             width="stretch",
             key=f"csv_{clave}",
         )
+
+    seccion_visitas(resultado, clave, original)
 
     base = resultado.base.drop(columns=["_fila_excel"], errors="ignore")
     tab_base, tab_rev = st.tabs(["Vista previa de datos calculados", f"Revisión ({int(base['requiere_revision'].sum()):,})"])

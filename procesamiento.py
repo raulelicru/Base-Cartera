@@ -13,6 +13,7 @@ import unicodedata
 import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 
 import pandas as pd
 
@@ -888,6 +889,181 @@ def exportar_excel_original(
             hoja.column_dimensions[get_column_letter(i)].width = ancho
             hoja.cell(row=1, column=i).font = Font(bold=True)
 
+    salida = io.BytesIO()
+    wb.save(salida)
+    return salida.getvalue()
+
+
+# --------------------------------------------------------------------------
+# Base para visitas de gestores
+# --------------------------------------------------------------------------
+
+PLANTILLA_VISITAS = Path(__file__).parent / "plantillas" / "Base_para_visitas.xlsx"
+
+COLUMNAS_VISITAS = [
+    "FECHA DE ASIGNACION",
+    "ZONA",
+    "ASIGNACION",  # única columna que se entrega en blanco (la llena el supervisor)
+    "NoDama",
+    "DIGITO VERIFICADOR",
+    "NOMBRE",
+    "DIRECCION",
+    "COLONIA",
+    "CP Extraido",
+    "LOCALIDAD",
+    "REFERENCIA",
+    "TEMPORALIDAD",
+    "CAMPANA",
+    "IMPORTE NETO FACTURA",
+    "TELEFONO CELULAR",
+    "DescSituacionCie",
+]
+
+# Columnas de visitas que se toman directo de la cartera (nombres aceptados, ya normalizados)
+CAMPOS_CARTERA_VISITAS = {
+    "NOMBRE": ["nombre", "nombre cliente", "nombre completo", "nombre dama", "cliente"],
+    "IMPORTE NETO FACTURA": ["importe neto factura", "importe neto", "importe factura", "importe"],
+    "TELEFONO CELULAR": ["telefono celular", "celular", "tel celular", "telefono"],
+    "DescSituacionCie": ["descsituacioncie", "desc situacion cie", "situacion cie", "descsituacion"],
+}
+
+MESES = ["ENE", "FEB", "MAR", "ABR", "MAY", "JUN", "JUL", "AGO", "SEP", "OCT", "NOV", "DIC"]
+RE_PREFIJO_COLONIA = re.compile(r"^(COLONIA|COL)\b\.?\s*", re.IGNORECASE)
+
+
+def _columna_cartera(columnas, candidatos) -> str | None:
+    norm = {normalizar_texto(c): c for c in columnas if not str(c).startswith("_")}
+    for cand in candidatos:
+        if cand in norm:
+            return norm[cand]
+    for n, original in norm.items():
+        if n.startswith(candidatos[0]):
+            return original
+    return None
+
+
+def columnas_visitas_faltantes(cartera: pd.DataFrame | None) -> list[str]:
+    """Columnas de visitas que dependen de la cartera y no vienen en ella."""
+    if cartera is None:
+        return list(CAMPOS_CARTERA_VISITAS)
+    return [k for k, cands in CAMPOS_CARTERA_VISITAS.items() if _columna_cartera(cartera.columns, cands) is None]
+
+
+def _colonia_visitas(colonia) -> str | None:
+    if es_vacio(colonia):
+        return None
+    return RE_PREFIJO_COLONIA.sub("", str(colonia)).strip() or None
+
+
+def _localidad(municipio) -> str | None:
+    if es_vacio(municipio):
+        return None
+    texto = unicodedata.normalize("NFKD", str(municipio))
+    texto = "".join(c for c in texto if not unicodedata.combining(c)).replace(".", "")
+    return re.sub(r"\s+", " ", texto).strip().upper()
+
+
+def _temporalidad(mora) -> str | None:
+    m = valor_limpio(mora)
+    if m is None:
+        return None
+    return str(m) if normalizar_texto(m).startswith("mora") else f"Mora {m}"
+
+
+def _campana(anio, campania):
+    """AnioSaldo 2025 + CampaniaSaldo 12 → 202512."""
+    a, c = clave(anio), clave(campania)
+    if a and c and a.isdigit() and c.isdigit():
+        return int(f"{a}{int(c):02d}")
+    return None
+
+
+def _cp_numero(cp):
+    return int(cp) if cp and str(cp).isdigit() else None
+
+
+def tabla_visitas(
+    resultado: Resultado, cartera: pd.DataFrame | None, fecha_asignacion
+) -> pd.DataFrame:
+    """Arma la base para visitas: una fila por cuenta, todas las columnas llenas con datos de
+    la base (y de la cartera original para nombre, importe, teléfono y situación), excepto
+    ASIGNACION, que se entrega en blanco."""
+    base = resultado.base.reset_index(drop=True)
+    extras = pd.DataFrame(index=base.index)
+    if cartera is not None:
+        cart = cartera.reset_index(drop=True)
+        if (
+            "_fila_excel" in cart
+            and cart["_fila_excel"].notna().all()
+            and base["_fila_excel"].notna().all()
+        ):
+            cart = cart.set_index("_fila_excel").reindex(base["_fila_excel"].astype(int)).reset_index(drop=True)
+        elif len(cart) != len(base):
+            cart = None
+        if cart is not None:
+            for campo, cands in CAMPOS_CARTERA_VISITAS.items():
+                col = _columna_cartera(cart.columns, cands)
+                if col is not None:
+                    extras[campo] = cart[col].map(valor_limpio)
+
+    fecha = pd.Timestamp(fecha_asignacion).to_pydatetime() if fecha_asignacion is not None else None
+    filas = []
+    for i, f in enumerate(base.to_dict("records")):
+        extra = extras.iloc[i].to_dict() if len(extras.columns) else {}
+        filas.append(
+            {
+                "FECHA DE ASIGNACION": fecha,
+                "ZONA": f["ZONA"],
+                "ASIGNACION": None,
+                "NoDama": f["NoDama"],
+                "DIGITO VERIFICADOR": f["DigitoVerificador"],
+                "NOMBRE": extra.get("NOMBRE"),
+                "DIRECCION": f["Direccion"],
+                "COLONIA": _colonia_visitas(f["Colonia"]),
+                "CP Extraido": _cp_numero(f["Cp"]),
+                "LOCALIDAD": _localidad(f["Municipio / Poblacion"]),
+                "REFERENCIA": f["Referencia"],
+                "TEMPORALIDAD": _temporalidad(f["Morosidad"]),
+                "CAMPANA": _campana(f["AnioSaldo"], f["CampaniaSaldo"]),
+                "IMPORTE NETO FACTURA": extra.get("IMPORTE NETO FACTURA"),
+                "TELEFONO CELULAR": extra.get("TELEFONO CELULAR"),
+                "DescSituacionCie": extra.get("DescSituacionCie"),
+            }
+        )
+    return pd.DataFrame(filas, columns=COLUMNAS_VISITAS, dtype=object)
+
+
+def nombre_hoja_visitas(fecha_asignacion) -> str:
+    if fecha_asignacion is None:
+        return "VISITAS"
+    f = pd.Timestamp(fecha_asignacion)
+    return f"VISITAS {f.day} {MESES[f.month - 1]}"
+
+
+def exportar_visitas(tabla: pd.DataFrame, fecha_asignacion=None) -> bytes:
+    """Escribe la base de visitas sobre la plantilla (mismo encabezado, colores, anchos y
+    formato de fecha que la base de visitas que usan los gestores)."""
+    from copy import copy
+
+    from openpyxl import load_workbook
+
+    wb = load_workbook(PLANTILLA_VISITAS)
+    ws = wb.active
+    ws.title = nombre_hoja_visitas(fecha_asignacion)
+    encabezados = [c.value for c in ws[1]]
+    if encabezados[: len(COLUMNAS_VISITAS)] != COLUMNAS_VISITAS:
+        raise ValueError("La plantilla de visitas no coincide con las columnas esperadas.")
+    modelo = {c.column: c for c in ws[2]}
+    estilos = {
+        col: (copy(m.font), copy(m.fill), copy(m.border), copy(m.alignment), m.number_format, copy(m.protection))
+        for col, m in modelo.items()
+    }
+    for i, fila in enumerate(tabla[COLUMNAS_VISITAS].itertuples(index=False), start=2):
+        for j, valor in enumerate(fila, start=1):
+            celda = ws.cell(row=i, column=j, value=valor_limpio(valor))
+            font, fill, border, alignment, fmt, protection = estilos[j]
+            celda.font, celda.fill, celda.border = copy(font), copy(fill), copy(border)
+            celda.alignment, celda.number_format, celda.protection = copy(alignment), fmt, copy(protection)
     salida = io.BytesIO()
     wb.save(salida)
     return salida.getvalue()
