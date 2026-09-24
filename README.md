@@ -79,6 +79,11 @@ columnas salen llenas y sólo **ASIGNACION** va en blanco:
 
 Se puede filtrar por zonas. Los nombres de columna se reconocen sin importar mayúsculas, acentos o espacios. Si la cartera no trae NOMBRE, SaldoDama, TelefonoCelular o DescSituacionCie, la app lo avisa.
 
+**Campaña sin tabla de Mora:** si la hoja *Campaña de Trabajo* de la Estructura no tiene el bloque de la
+campaña (pero *Calendario de Cierre* sí), la app muestra una tabla editable CampaniaSaldo → Mora con una
+sugerencia (la tabla de la última campaña disponible, recorrida las campañas que faltan). Al confirmarla se
+puede generar la base y queda una advertencia en el resumen. Lo correcto es agregar el bloque al archivo.
+
 **Formato de salida (barra lateral):** color de las columnas que anexa el sistema (azul claro por defecto)
 y la opción (activada por defecto) de pintar también las columnas que ya venían vacías en la cartera y llena el sistema. En las filas que requieren
 revisión, las celdas anexadas se marcan en amarillo y el motivo va en *Motivo de revisión*; las celdas

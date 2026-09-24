@@ -358,6 +358,12 @@ class EstructuraGeneral:
         b = set(_bloques(self.campanias))
         return sorted(a & b) if a and b else sorted(a | b)
 
+    def tiene_calendario(self, n: int) -> bool:
+        return n in _bloques(self.calendario)
+
+    def tiene_morosidad(self, n: int) -> bool:
+        return n in _bloques(self.campanias)
+
     def diagnostico_campania(self, n: int) -> str | None:
         """Explica en qué hoja falta el bloque 'Campaña de Trabajo N' (None si está en ambas)."""
         faltan = []
@@ -470,6 +476,30 @@ def tabla_morosidad(estructura: EstructuraGeneral, n: int) -> dict[str, object]:
             continue
         tabla[k] = valor_limpio(crudo.iat[r, col_mora])
     return tabla
+
+
+CAMPANIAS_POR_ANIO = 26
+
+
+def sugerir_morosidad(estructura: EstructuraGeneral, n: int, campanias_saldo) -> dict[str, object]:
+    """Propone la tabla CampaniaSaldo → Mora para la Campaña de Trabajo N cuando la hoja
+    'Campaña de Trabajo' no la trae. Toma la última campaña anterior que sí existe (M) y recorre
+    su tabla N-M campañas: Mora_N(c) = Mora_M(c - (N-M)), con campañas cíclicas 1..26.
+    Es sólo una sugerencia: el usuario debe revisarla y confirmarla en la app."""
+    anteriores = [m for m in _bloques(estructura.campanias) if m < n]
+    base = tabla_morosidad(estructura, max(anteriores)) if anteriores else {}
+    salto = n - max(anteriores) if anteriores else 0
+    sugerida: dict[str, object] = {}
+    for c in campanias_saldo:
+        k = clave(c)
+        if k is None or k in sugerida:
+            continue
+        mora = None
+        if base and k.isdigit():
+            origen = (int(k) - salto - 1) % CAMPANIAS_POR_ANIO + 1
+            mora = base.get(str(origen))
+        sugerida[k] = mora
+    return dict(sorted(sugerida.items(), key=lambda kv: (len(kv[0]), kv[0])))
 
 
 def _leer_base_zonas(crudo: pd.DataFrame, advertencias: list[str]) -> pd.DataFrame:
@@ -627,10 +657,20 @@ def generar_base(
     estructura: EstructuraGeneral,
     catalogo_cp: pd.DataFrame | None,
     campania_trabajo: int,
+    morosidad_manual: dict | None = None,
 ) -> Resultado:
+    """``morosidad_manual`` (CampaniaSaldo → Mora) sustituye a la tabla de la hoja 'Campaña de
+    Trabajo' cuando esa hoja no trae el bloque de la campaña y el usuario la confirma en la app."""
     advertencias = list(estructura.advertencias)
     calendario = tabla_calendario(estructura, campania_trabajo)
-    morosidad = tabla_morosidad(estructura, campania_trabajo)
+    if morosidad_manual is not None:
+        morosidad = {clave(k): valor_limpio(v) for k, v in morosidad_manual.items() if clave(k) and not es_vacio(v)}
+        advertencias.append(
+            f"La Morosidad se calculó con la tabla capturada en la app, porque la hoja 'Campaña de Trabajo' "
+            f"no tiene el bloque 'Campaña de Trabajo {campania_trabajo}'. Agréguelo a la Estructura General."
+        )
+    else:
+        morosidad = tabla_morosidad(estructura, campania_trabajo)
     zonas = estructura.zonas.set_index("_clave")[["REGION", "RUTA", "DIVISION", "ID COBRADOR"]].to_dict("index")
 
     cps: dict[str, dict] = {}

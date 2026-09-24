@@ -169,3 +169,21 @@ def test_campania_en_bloque_inferior_y_diagnostico():
     msg = e.diagnostico_campania(21)
     assert "Campaña de Trabajo" in msg and "Calendario de Cierre" not in msg.split("(")[0]
     assert e.diagnostico_campania(19) is None
+
+
+def test_sugerir_morosidad_recorre_la_ultima_tabla():
+    # Tabla de la campaña 19: 18,17 → 1; 16 → 2; 15, 26 → 3
+    e = proc.leer_estructura(_estructura_xlsx())
+    assert not e.tiene_morosidad(21) and e.tiene_morosidad(19)
+    s = proc.sugerir_morosidad(e, 21, [20, 19, 18, 17, 2, 99])
+    # Para la 21 (2 campañas después): 20,19 → 1; 18 → 2; 17 → 3; 2 (= 26 + 2) → 3
+    assert s == {"2": 3, "17": 3, "18": 2, "19": 1, "20": 1, "99": None}
+
+
+def test_generar_base_con_morosidad_manual():
+    e = proc.leer_estructura(_estructura_xlsx())
+    cartera = proc._normalizar_columnas_cartera(_cartera())
+    # Calendario sí tiene la 20; la hoja de morosidad no
+    res = proc.generar_base(cartera, e, None, 20, morosidad_manual={"15": 3, 18: "2", "3": None})
+    assert res.base["Morosidad"].tolist() == [3, "2", None]
+    assert any("tabla capturada en la app" in a for a in res.advertencias)

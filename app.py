@@ -16,7 +16,7 @@ import streamlit as st
 import almacenamiento as alm
 import procesamiento as proc
 
-VERSION = "24/09/2026 · búsqueda de campañas en toda la hoja"
+VERSION = "24/09/2026 · v3 morosidad capturable"
 DATA_DIR = Path(os.environ.get("BASE_CARTERA_DATA_DIR", Path(__file__).parent / "data"))
 
 st.set_page_config(page_title="Base de Cartera", page_icon="📋", layout="wide")
@@ -92,9 +92,13 @@ with st.sidebar:
         fecha_est = None
     if estructura is not None:
         st.success(f"Cargada ({fmt_fecha(fecha_est)})")
+        def _rango(nums):
+            return f"{nums[0]}–{nums[-1]}" if nums and nums == list(range(nums[0], nums[-1] + 1)) else ", ".join(map(str, nums)) or "—"
+
         st.caption(
-            f"{len(estructura.zonas):,} zonas · Campañas de trabajo: "
-            f"{', '.join(map(str, estructura.campanias_disponibles())) or '—'}"
+            f"{len(estructura.zonas):,} zonas · Campañas de trabajo en *Calendario de Cierre*: "
+            f"{_rango(sorted(proc._bloques(estructura.calendario)))} · en *Campaña de Trabajo* (Mora): "
+            f"{_rango(sorted(proc._bloques(estructura.campanias)))}"
         )
         for adv in estructura.advertencias:
             st.warning(adv)
@@ -361,6 +365,57 @@ def mostrar_resultado(resultado: proc.Resultado, n: int, clave: str, original: t
 # --------------------------------------------------------------------------
 
 
+@st.cache_data(show_spinner=False, max_entries=4)
+def campanias_saldo_de(contenido: bytes, nombre: str) -> list:
+    cartera = proc.leer_cartera(contenido, nombre)
+    return [v for v in cartera["CampaniaSaldo"].tolist() if not proc.es_vacio(v)]
+
+
+def capturar_morosidad(n: int, archivo_cartera) -> dict | None:
+    """Tabla CampaniaSaldo → Mora capturada/confirmada por el usuario cuando la hoja
+    'Campaña de Trabajo' no tiene el bloque N. Devuelve None mientras no se confirme."""
+    st.warning(
+        f"La hoja **Campaña de Trabajo** de la Estructura General no tiene el bloque "
+        f"**'Campaña de Trabajo {n}'** (la tabla CAMPAÑA → Mora), así que la Morosidad no se puede tomar de ahí. "
+        "Lo correcto es agregar ese bloque al archivo y volver a cargarlo. Mientras tanto, puede revisar y "
+        "confirmar aquí la tabla para esta corrida."
+    )
+    try:
+        campanias = campanias_saldo_de(archivo_cartera.getvalue(), archivo_cartera.name)
+    except Exception as e:  # noqa: BLE001
+        st.error(f"No se pudo leer la cartera: {e}")
+        return None
+    sugerida = proc.sugerir_morosidad(estructura, n, campanias)
+    anteriores = [m for m in estructura.campanias_disponibles() if m < n]
+    st.caption(
+        (f"Sugerencia calculada recorriendo la tabla de la Campaña de Trabajo {max(anteriores)}. " if anteriores else "")
+        + "Revise cada valor; puede editarlo en la columna **Mora**."
+    )
+    tabla = pd.DataFrame(
+        {"CampaniaSaldo": list(sugerida.keys()), "Mora": [None if v is None else str(v) for v in sugerida.values()]}
+    )
+    editada = st.data_editor(
+        tabla,
+        hide_index=True,
+        disabled=["CampaniaSaldo"],
+        column_config={
+            "CampaniaSaldo": st.column_config.TextColumn("Campaña de saldo (en la cartera)"),
+            "Mora": st.column_config.TextColumn(f"Mora en la Campaña de Trabajo {n}"),
+        },
+        key=f"mora_{n}_{archivo_cartera.name}",
+    )
+    confirmado = st.checkbox(
+        f"Confirmo la tabla de Morosidad para la Campaña de Trabajo {n}", key=f"conf_mora_{n}_{archivo_cartera.name}"
+    )
+    if not confirmado:
+        return None
+    return {
+        r["CampaniaSaldo"]: (int(r["Mora"]) if str(r["Mora"]).strip().isdigit() else r["Mora"])
+        for r in editada.to_dict("records")
+        if not proc.es_vacio(r["Mora"])
+    }
+
+
 def pantalla_generar() -> None:
     st.write(
         "Suba la **Cartera de la campaña**, confirme el número de **Campaña de Trabajo** y genere la base. "
@@ -400,21 +455,28 @@ def pantalla_generar() -> None:
     with col2:
         if inferida:
             st.caption(f"Inferida del nombre del archivo: **{inferida}**. Verifique antes de generar.")
-        if campania:
-            problema = estructura.diagnostico_campania(int(campania))
-            if problema:
-                st.error(problema)
+        bloqueado = False
+        if campania and not estructura.tiene_calendario(int(campania)):
+            st.error(estructura.diagnostico_campania(int(campania)))
+            bloqueado = True
+
+    morosidad_manual = None
+    if campania and archivo_cartera is not None and not bloqueado and not estructura.tiene_morosidad(int(campania)):
+        morosidad_manual = capturar_morosidad(int(campania), archivo_cartera)
+        bloqueado = morosidad_manual is None
 
     guardar = False
     if almacen.guarda_historial:
         guardar = st.checkbox("Guardar esta base en Supabase", value=True)
 
-    if st.button("Generar base", type="primary", disabled=archivo_cartera is None or not campania):
+    if st.button("Generar base", type="primary", disabled=archivo_cartera is None or not campania or bloqueado):
         try:
             with st.spinner("Leyendo cartera…"):
                 cartera = proc.leer_cartera(archivo_cartera.getvalue(), archivo_cartera.name)
             with st.spinner(f"Procesando {len(cartera):,} cuentas…"):
-                resultado = proc.generar_base(cartera, estructura, catalogo, int(campania))
+                resultado = proc.generar_base(
+                    cartera, estructura, catalogo, int(campania), morosidad_manual=morosidad_manual
+                )
         except Exception as e:  # noqa: BLE001
             st.error(f"No se pudo generar la base: {e}")
             return
