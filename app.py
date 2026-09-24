@@ -16,7 +16,7 @@ import streamlit as st
 import almacenamiento as alm
 import procesamiento as proc
 
-VERSION = "23/09/2026 · visitas v2 (SaldoDama, TelefonoCelular)"
+VERSION = "24/09/2026 · dirección calle en MAYÚSCULAS"
 DATA_DIR = Path(os.environ.get("BASE_CARTERA_DATA_DIR", Path(__file__).parent / "data"))
 
 st.set_page_config(page_title="Base de Cartera", page_icon="📋", layout="wide")

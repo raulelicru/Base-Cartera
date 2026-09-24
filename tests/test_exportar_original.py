@@ -76,7 +76,7 @@ def test_salida_conserva_cartera_y_anexa_columnas():
     assert anexadas == ["Direccion Calle", "Colonia", "Municipio / Poblacion", "Cp", "Estado",
                         "Zona (Urbano/Rural)", proc.COLUMNA_MOTIVO]
     assert all(ws.cell(1, c).fill.fgColor.rgb == "FFFFC7CE" for c in range(18, 25))
-    assert ws.cell(2, 18).value == "Pv Tecolote No. 37 Interior a" and ws.cell(2, 21).value == "05050"
+    assert ws.cell(2, 18).value == "PV TECOLOTE NO. 37 INTERIOR A" and ws.cell(2, 21).value == "05050"
     assert ws.cell(2, 18).fill.fgColor.rgb == "FFFFC7CE"
     # Fila que requiere revisión: celdas anexadas en amarillo y con motivo
     assert ws.cell(4, 18).fill.fgColor.rgb == "FFFFFF00"

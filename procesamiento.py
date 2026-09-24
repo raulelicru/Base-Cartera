@@ -180,9 +180,10 @@ class DireccionSegmentada:
     colonia: str = ""
 
     def direccion_calle(self) -> str:
+        """Dirección calle en MAYÚSCULAS, ej. 'TULE NO. 79 INTERIOR B MZ 3 L- 12'."""
         partes = []
         if self.vialidad:
-            partes.append(self.vialidad.title())
+            partes.append(self.vialidad)
         if self.no:
             partes.append(f"No. {self.no}")
         if self.interior:
@@ -191,7 +192,7 @@ class DireccionSegmentada:
             partes.append(f"Mz {self.mza}")
         if self.lt:
             partes.append(f"L- {self.lt}")
-        return " ".join(partes)
+        return re.sub(r"\s+", " ", " ".join(partes)).upper()
 
 
 def segmentar_direccion(direccion) -> DireccionSegmentada:

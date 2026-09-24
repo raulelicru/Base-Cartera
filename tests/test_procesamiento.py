@@ -59,9 +59,9 @@ def test_extraer_cp():
 
 
 @pytest.mark.parametrize("entrada,calle", [
-    ("PV TECOLOTE No 37 Int a COL CENTRO CP 5050", "Pv Tecolote No. 37 Interior a"),
-    ("HECTOR ALVARADO Mza I Lt 12 LOS PINOS CP 50000", "Hector Alvarado Mz I L- 12"),
-    ("TENANGO DEL VALLE No 0 Mza 167 Lt 18 LA LOMA CP 50000", "Tenango Del Valle No. 0 Mz 167 L- 18"),
+    ("PV TECOLOTE No 37 Int a COL CENTRO CP 5050", "PV TECOLOTE NO. 37 INTERIOR A"),
+    ("HECTOR ALVARADO Mza I Lt 12 LOS PINOS CP 50000", "HECTOR ALVARADO MZ I L- 12"),
+    ("TENANGO DEL VALLE No 0 Mza 167 Lt 18 LA LOMA CP 50000", "TENANGO DEL VALLE NO. 0 MZ 167 L- 18"),
 ])
 def test_direccion_calle(entrada, calle):
     assert proc.segmentar_direccion(entrada).direccion_calle() == calle

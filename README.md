@@ -95,7 +95,7 @@ cualquier base generada anteriormente, filtrando por Campaña de Trabajo.
 |---|---|
 | 4.1 | CP con `CP\s*(\d{1,5})\s*$`, relleno a 5 dígitos; `00000` o sin match → vacío y revisión. |
 | 4.2 | Cruce con SEPOMEX: Municipio, Estado y Zona (`d_zona`; si no existe, se infiere del tipo de asentamiento). |
-| 4.3–4.4 | Segmentación por palabras clave `No`, `Mza`, `Int`, `Lt` → *Direccion Calle* (`{Vialidad} No. {x} Interior {x} Mz {x} L- {x}`) y *Colonia*. |
+| 4.3–4.4 | Segmentación por palabras clave `No`, `Mza`, `Int`, `Lt` → *Direccion Calle* en MAYÚSCULAS (`{VIALIDAD} NO. {x} INTERIOR {x} MZ {x} L- {x}`) y *Colonia*. |
 | 4.5 | `ZONA` → REGION, RUTA, DIVISION, ID COBRADOR (hoja *Base de Zonas*). |
 | 4.6 | `Concatenado = NoDama-CampaniaSaldo`. |
 | 4.7 | Fecha de cierre: bloque `Campaña de Trabajo N` de *Calendario de Cierre*, por RUTA. |

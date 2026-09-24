@@ -55,7 +55,7 @@ def test_tabla_visitas_completa():
         "NoDama": 7241893,
         "DIGITO VERIFICADOR": 2,
         "NOMBRE": "CARMEN DELIA HERNANDEZ SANTOS",
-        "DIRECCION": "Jose Alfredo Jimenez No. 11 Mz 37 L- 11",
+        "DIRECCION": "JOSE ALFREDO JIMENEZ NO. 11 MZ 37 L- 11",
         "COLONIA": "FORESTAL",
         "CP Extraido": 7140,
         "LOCALIDAD": "GUSTAVO A MADERO",
