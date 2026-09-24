@@ -196,3 +196,26 @@ def test_catalogo_incluido_cubre_cps_reales():
     assert d["07140"] == {"Municipio": "Gustavo A. Madero", "Estado": "Ciudad de México", "Zona": "Urbano"}
     assert d["45685"]["Municipio"] == "El Salto" and d["45679"]["Estado"] == "Jalisco"
     assert set(cat["Zona"].dropna()) <= {"Urbano", "Rural", "Semiurbano"}
+
+
+def test_catalogo_excel_oficial_con_hoja_de_notas():
+    wb = Workbook()
+    wb.active.title = "Nota"
+    wb["Nota"]["A1"] = "El Catálogo Nacional de Códigos Postales es elaborado por Correos de México"
+    cols = ["d_codigo", "d_asenta", "d_tipo_asenta", "D_mnpio", "d_estado", "d_ciudad", "d_CP", "c_estado",
+            "c_oficina", "c_CP", "c_tipo_asenta", "c_mnpio", "id_asenta_cpcons", "d_zona", "c_cve_ciudad"]
+    ws = wb.create_sheet("Jalisco")
+    ws.append(cols)
+    ws.append(["45685", "Cima Serena", "Fraccionamiento", "El Salto", "Jalisco", "", "", "", "", "", "", "", "", "Urbano", ""])
+    ws.append(["45685", "Otro", "Colonia", "El Salto", "Jalisco", "", "", "", "", "", "", "", "", "Urbano", ""])
+    ws.append(["45686", "Hacienda Vieja", "Ranchería", "El Salto", "Jalisco", "", "", "", "", "", "", "", "", "", ""])
+    ws2 = wb.create_sheet("Distrito_Federal")
+    ws2.append(cols)
+    ws2.append([7140, "Forestal", "Colonia", "Gustavo A. Madero", "Ciudad de México"] + [""] * 8 + ["Urbano", ""])
+    buf = io.BytesIO(); wb.save(buf)
+    cat = proc.leer_catalogo_cp(buf.getvalue(), "CPdescarga.xlsx").set_index("Cp").to_dict("index")
+    assert cat == {
+        "07140": {"Municipio": "Gustavo A. Madero", "Estado": "Ciudad de México", "Zona": "Urbano"},
+        "45685": {"Municipio": "El Salto", "Estado": "Jalisco", "Zona": "Urbano"},
+        "45686": {"Municipio": "El Salto", "Estado": "Jalisco", "Zona": "Rural"},  # inferida de 'Ranchería'
+    }

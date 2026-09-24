@@ -16,7 +16,7 @@ import streamlit as st
 import almacenamiento as alm
 import procesamiento as proc
 
-VERSION = "24/09/2026 · v4 catálogo de CP incluido"
+VERSION = "24/09/2026 · v5 catálogo incluido + carga rápida"
 DATA_DIR = Path(os.environ.get("BASE_CARTERA_DATA_DIR", Path(__file__).parent / "data"))
 
 st.set_page_config(page_title="Base de Cartera", page_icon="📋", layout="wide")

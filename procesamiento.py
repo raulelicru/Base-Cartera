@@ -282,6 +282,78 @@ def _leer_txt_sepomex(contenido: bytes) -> pd.DataFrame:
     )
 
 
+def _hay_calamine() -> bool:
+    import importlib.util
+
+    return importlib.util.find_spec("python_calamine") is not None
+
+
+def _hojas_excel(contenido: bytes):
+    """Genera las filas (listas de valores) de cada hoja. Usa python-calamine (muy rápido, lee
+    .xlsx y .xls) si está instalado; si no, openpyxl en modo de sólo lectura."""
+    try:
+        from python_calamine import CalamineWorkbook
+    except ImportError:
+        CalamineWorkbook = None
+    if CalamineWorkbook is not None:
+        wb = CalamineWorkbook.from_filelike(io.BytesIO(contenido))
+        for nombre in wb.sheet_names:
+            yield iter(wb.get_sheet_by_name(nombre).to_python(skip_empty_area=False))
+        return
+    from openpyxl import load_workbook
+
+    wb = load_workbook(io.BytesIO(contenido), read_only=True, data_only=True)
+    try:
+        for ws in wb.worksheets:
+            yield ws.iter_rows(values_only=True)
+    finally:
+        wb.close()
+
+
+def _leer_excel_sepomex(contenido: bytes) -> pd.DataFrame:
+    """Lee el catálogo SEPOMEX en Excel (una hoja por estado, ~150 mil filas) conservando sólo las
+    columnas necesarias: mucho más rápido y con menos memoria que pandas.read_excel."""
+
+    buscadas = {
+        "cp": ["d codigo", "codigo postal", "cp", "codigo"],
+        "mun": ["d mnpio", "municipio", "mnpio", "poblacion"],
+        "edo": ["d estado", "estado"],
+        "zona": ["d zona", "zona"],
+        "tipo": ["d tipo asenta", "tipo asentamiento", "tipo asenta"],
+    }
+    datos = {k: [] for k in buscadas}
+    for filas in _hojas_excel(contenido):
+        indices = None
+        for fila in filas:
+            encabezados = [normalizar_texto(v) for v in fila]
+            if not any(e in ("d codigo", "codigo postal", "cp") for e in encabezados):
+                continue
+            indices = {}
+            for k, cands in buscadas.items():
+                col = _buscar_columna(encabezados, cands)
+                indices[k] = encabezados.index(col) if col is not None else None
+            break
+        if not indices or indices["cp"] is None:
+            continue  # hoja de notas u otra sin catálogo
+        for fila in filas:
+            if not fila:
+                continue
+            for k, i in indices.items():
+                v = fila[i] if i is not None and i < len(fila) else None
+                datos[k].append(None if v == "" else v)
+    if not datos["cp"]:
+        raise ValueError("No se encontró una columna de código postal en el catálogo.")
+    return pd.DataFrame(
+        {
+            "d_codigo": [None if v is None else str(v).split(".")[0].strip() for v in datos["cp"]],
+            "D_mnpio": datos["mun"],
+            "d_estado": datos["edo"],
+            "d_zona": datos["zona"],
+            "d_tipo_asenta": datos["tipo"],
+        }
+    )
+
+
 def leer_catalogo_cp(contenido: bytes, nombre: str) -> pd.DataFrame:
     """Lee el catálogo SEPOMEX (TXT, XLS/XLSX con una hoja por estado, CSV o ZIP)
     y lo reduce a una fila por código postal: Cp, Municipio, Estado, Zona."""
@@ -294,7 +366,11 @@ def leer_catalogo_cp(contenido: bytes, nombre: str) -> pd.DataFrame:
                 raise ValueError("El ZIP no contiene un archivo TXT/CSV/XLS del catálogo.")
             return leer_catalogo_cp(z.read(internos[0]), internos[0])
 
-    if nombre_l.endswith((".xlsx", ".xls", ".xlsm")):
+    if nombre_l.endswith((".xlsx", ".xlsm")):
+        crudo = _leer_excel_sepomex(contenido)
+    elif nombre_l.endswith(".xls") and _hay_calamine():
+        crudo = _leer_excel_sepomex(contenido)
+    elif nombre_l.endswith(".xls"):
         hojas = pd.read_excel(io.BytesIO(contenido), sheet_name=None, dtype=str)
         partes = [h for n, h in hojas.items() if _buscar_columna(h.columns, ["d codigo", "codigo postal", "cp"])]
         if not partes:
@@ -311,32 +387,43 @@ def leer_catalogo_cp(contenido: bytes, nombre: str) -> pd.DataFrame:
     if not col_cp:
         raise ValueError("No se encontró la columna de código postal en el catálogo.")
 
-    df = pd.DataFrame({"Cp": crudo[col_cp].astype(str).str.strip()})
-    df = df.assign(
-        Municipio=crudo[col_mun].astype(str).str.strip() if col_mun else None,
-        Estado=crudo[col_edo].astype(str).str.strip() if col_edo else None,
-        _zona=crudo[col_zona] if col_zona else None,
-        _tipo=crudo[col_tipo] if col_tipo else None,
+    def texto(col):
+        if not col:
+            return pd.Series(None, index=crudo.index, dtype=object)
+        serie = crudo[col].astype(object).where(crudo[col].notna(), None)
+        return serie.map(lambda v: None if v is None or str(v).strip() == "" else str(v).strip())
+
+    df = pd.DataFrame(
+        {
+            "Cp": crudo[col_cp].astype(str).str.strip().str.replace(r"\.0+$", "", regex=True),
+            "Municipio": texto(col_mun),
+            "Estado": texto(col_edo),
+            "_zona": texto(col_zona),
+            "_tipo": texto(col_tipo),
+        }
     )
     df = df[df["Cp"].str.fullmatch(r"\d{1,5}", na=False)].copy()
     df["Cp"] = df["Cp"].str.zfill(5)
 
-    def zona_fila(fila):
-        z = ZONAS_VALIDAS.get(normalizar_texto(fila["_zona"]))
-        return z or zona_desde_tipo_asentamiento(fila["_tipo"])
+    # Zona: la del catálogo (Urbano/Semiurbano/Rural) o, si no viene, inferida del tipo de asentamiento.
+    # Se calcula sobre los valores únicos (pocos) en lugar de fila por fila.
+    zona_directa = df["_zona"].map({z: ZONAS_VALIDAS.get(normalizar_texto(z)) for z in df["_zona"].dropna().unique()})
+    zona_tipo = df["_tipo"].map({t: zona_desde_tipo_asentamiento(t) for t in df["_tipo"].dropna().unique()})
+    df["Zona"] = zona_directa.where(zona_directa.notna(), zona_tipo)
 
-    df["Zona"] = df.apply(zona_fila, axis=1) if len(df) else pd.Series(dtype=object)
+    def mas_frecuente(col):
+        """Valor más frecuente por CP (vectorizado)."""
+        v = df[["Cp", col]].dropna()
+        if v.empty:
+            return pd.Series(dtype=object, name=col)
+        conteo = v.groupby(["Cp", col], sort=False).size().reset_index(name="_n")
+        conteo = conteo.sort_values(["Cp", "_n"], ascending=[True, False], kind="stable")
+        return conteo.drop_duplicates("Cp").set_index("Cp")[col]
 
-    def primero(serie):
-        s = serie.dropna()
-        s = s[s.astype(str).str.strip() != ""]
-        return s.mode().iloc[0] if len(s) else None
-
-    catalogo = (
-        df.groupby("Cp", sort=True)
-        .agg(Municipio=("Municipio", primero), Estado=("Estado", primero), Zona=("Zona", primero))
-        .reset_index()
-    )
+    catalogo = pd.DataFrame(index=pd.Index(sorted(df["Cp"].unique()), name="Cp"))
+    for col in ("Municipio", "Estado", "Zona"):
+        catalogo[col] = mas_frecuente(col)
+    catalogo = catalogo.astype(object).where(catalogo.notna(), None).reset_index()
     return catalogo
 
 
