@@ -16,7 +16,7 @@ import streamlit as st
 import almacenamiento as alm
 import procesamiento as proc
 
-VERSION = "24/09/2026 · dirección calle en MAYÚSCULAS"
+VERSION = "24/09/2026 · búsqueda de campañas en toda la hoja"
 DATA_DIR = Path(os.environ.get("BASE_CARTERA_DATA_DIR", Path(__file__).parent / "data"))
 
 st.set_page_config(page_title="Base de Cartera", page_icon="📋", layout="wide")
@@ -400,12 +400,10 @@ def pantalla_generar() -> None:
     with col2:
         if inferida:
             st.caption(f"Inferida del nombre del archivo: **{inferida}**. Verifique antes de generar.")
-        disponibles = estructura.campanias_disponibles()
-        if campania and disponibles and int(campania) not in disponibles:
-            st.error(
-                f"La Campaña de Trabajo {int(campania)} no existe en la Estructura General. "
-                f"Disponibles: {', '.join(map(str, disponibles))}."
-            )
+        if campania:
+            problema = estructura.diagnostico_campania(int(campania))
+            if problema:
+                st.error(problema)
 
     guardar = False
     if almacen.guarda_historial:

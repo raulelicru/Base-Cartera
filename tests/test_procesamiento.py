@@ -138,3 +138,34 @@ def test_columna_zona_duplicada():
     df = _cartera().assign(Zona=[1, 2, 3])
     out = proc._normalizar_columnas_cartera(df)
     assert out["ZONA"].tolist() == [101, 102, 999]
+
+
+def _estructura_apilada() -> bytes:
+    """Bloques 19 arriba y 21 debajo (otro renglón de bloques), con encabezados en mayúsculas."""
+    wb = Workbook()
+    z = wb.active
+    z.title = "Base de Zonas"
+    z.append(["ZONA", "REGION", "DIVISION", "RUTA", "NO. COBRADOR"])
+    z.append([101, "CENTRO", "DIV 1", 5, 9001])
+    cal = wb.create_sheet("Calendario de Cierre")
+    cal.cell(1, 1, "Campaña de Trabajo 19")
+    cal.cell(2, 1, "Ruta"); cal.cell(2, 2, "Fecha Inicio"); cal.cell(2, 3, "Fecha Cierre")
+    cal.cell(3, 1, 5); cal.cell(3, 3, datetime(2026, 9, 14))
+    cal.cell(30, 1, "CAMPAÑA DE TRABAJO 21")
+    cal.cell(31, 1, "Ruta"); cal.cell(31, 2, "Fecha Inicio"); cal.cell(31, 3, "Fecha Cierre")
+    cal.cell(32, 1, 5); cal.cell(32, 3, datetime(2026, 10, 12))
+    cam = wb.create_sheet("Campaña de Trabajo")
+    cam.cell(1, 1, "Campaña de Trabajo 19"); cam.cell(2, 1, "CAMPAÑA"); cam.cell(2, 2, "Mora")
+    cam.cell(3, 1, 15); cam.cell(3, 2, 3)
+    buf = io.BytesIO(); wb.save(buf)
+    return buf.getvalue()
+
+
+def test_campania_en_bloque_inferior_y_diagnostico():
+    e = proc.leer_estructura(_estructura_apilada())
+    assert proc.tabla_calendario(e, 21) == {"5": datetime(2026, 10, 12)}
+    assert proc.tabla_calendario(e, 19) == {"5": datetime(2026, 9, 14)}  # no se mezcla con el bloque 21
+    assert e.campanias_disponibles() == [19]
+    msg = e.diagnostico_campania(21)
+    assert "Campaña de Trabajo" in msg and "Calendario de Cierre" not in msg.split("(")[0]
+    assert e.diagnostico_campania(19) is None

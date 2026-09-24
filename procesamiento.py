@@ -353,9 +353,26 @@ class EstructuraGeneral:
     advertencias: list[str] = field(default_factory=list)
 
     def campanias_disponibles(self) -> list[int]:
+        """Campañas de trabajo que tienen bloque en ambas hojas."""
         a = set(_bloques(self.calendario))
         b = set(_bloques(self.campanias))
         return sorted(a & b) if a and b else sorted(a | b)
+
+    def diagnostico_campania(self, n: int) -> str | None:
+        """Explica en qué hoja falta el bloque 'Campaña de Trabajo N' (None si está en ambas)."""
+        faltan = []
+        for hoja, crudo in (("Calendario de Cierre", self.calendario), ("Campaña de Trabajo", self.campanias)):
+            bloques = sorted(_bloques(crudo))
+            if n not in bloques:
+                ultimo = f"la última es la {bloques[-1]}" if bloques else "no se encontró ninguna"
+                faltan.append(f"la hoja **{hoja}** no tiene el bloque 'Campaña de Trabajo {n}' ({ultimo})")
+        if not faltan:
+            return None
+        return (
+            f"La Campaña de Trabajo {n} no está en la Estructura General cargada: " + "; ".join(faltan) + ". "
+            f"Agregue el bloque 'Campaña de Trabajo {n}' en esa hoja del archivo Estructura_General_de_Bases.xlsx "
+            "y vuelva a cargarlo en la barra lateral (Reemplazar Estructura General)."
+        )
 
 
 def _hoja(hojas: dict, nombre: str) -> pd.DataFrame:
@@ -369,29 +386,40 @@ def _hoja(hojas: dict, nombre: str) -> pd.DataFrame:
     raise ValueError(f"No se encontró la hoja '{nombre}' en el archivo de Estructura General.")
 
 
-def _bloques(crudo: pd.DataFrame, filas_busqueda: int = 10) -> dict[int, tuple[int, int]]:
-    """Encuentra encabezados 'Campaña de Trabajo N' → {N: (fila, columna)}."""
+RE_ENCABEZADO_CAMPANIA = re.compile(r"^campana\s*(?:de\s*)?trabajo\s*(?:no\s*|num\s*|n\s*)?(\d+)$")
+
+
+def _bloques(crudo: pd.DataFrame) -> dict[int, tuple[int, int]]:
+    """Encuentra encabezados 'Campaña de Trabajo N' → {N: (fila, columna)} en toda la hoja
+    (acepta variantes como 'CAMPAÑA DE TRABAJO 21', 'Campaña Trabajo 21', 'Campaña de trabajo No. 21')."""
     encontrados: dict[int, tuple[int, int]] = {}
-    for r in range(min(filas_busqueda, len(crudo))):
+    for r in range(len(crudo)):
         for c in range(crudo.shape[1]):
-            m = re.fullmatch(r"campana de trabajo\s*(\d+)", normalizar_texto(crudo.iat[r, c]))
+            v = crudo.iat[r, c]
+            if not isinstance(v, str):
+                continue
+            m = RE_ENCABEZADO_CAMPANIA.match(normalizar_texto(v))
             if m and int(m.group(1)) not in encontrados:
                 encontrados[int(m.group(1))] = (r, c)
     return encontrados
 
 
-def _rango_bloque(crudo: pd.DataFrame, n: int, hoja: str) -> tuple[int, int, int]:
+def _rango_bloque(crudo: pd.DataFrame, n: int, hoja: str) -> tuple[int, int, int, int]:
+    """(fila del encabezado, columna inicial, columna final exclusiva, fila final exclusiva)."""
     bloques = _bloques(crudo)
     if n not in bloques:
         disponibles = ", ".join(str(k) for k in sorted(bloques)) or "ninguna"
         raise ValueError(
             f"No existe el bloque 'Campaña de Trabajo {n}' en la hoja '{hoja}'. "
-            f"Campañas disponibles: {disponibles}."
+            f"Campañas disponibles en esa hoja: {disponibles}."
         )
     fila, col = bloques[n]
     siguientes = [c for (r, c) in bloques.values() if r == fila and c > col]
     fin = min(siguientes) if siguientes else crudo.shape[1]
-    return fila, col, fin
+    # Si hay otro renglón de bloques más abajo en las mismas columnas, los datos terminan ahí
+    abajo = [r for (r, c) in bloques.values() if r > fila and col <= c < fin]
+    fin_fila = min(abajo) if abajo else len(crudo)
+    return fila, col, fin, fin_fila
 
 
 def _fila_subencabezado(crudo, fila, col, fin, palabras) -> int:
@@ -405,7 +433,7 @@ def _fila_subencabezado(crudo, fila, col, fin, palabras) -> int:
 def tabla_calendario(estructura: EstructuraGeneral, n: int) -> dict[str, object]:
     """RUTA → Fecha Cierre para la Campaña de Trabajo N (sección 4.7)."""
     crudo = estructura.calendario
-    fila, col, fin = _rango_bloque(crudo, n, "Calendario de Cierre")
+    fila, col, fin, fin_fila = _rango_bloque(crudo, n, "Calendario de Cierre")
     sub = _fila_subencabezado(crudo, fila, col, fin, ["ruta", "fecha"])
     nombres = {c: normalizar_texto(crudo.iat[sub, c]) for c in range(col, fin)}
 
@@ -417,7 +445,7 @@ def tabla_calendario(estructura: EstructuraGeneral, n: int) -> dict[str, object]
         col_fecha = fechas[-1] if fechas else min(col + 2, fin - 1)
 
     tabla: dict[str, object] = {}
-    for r in range(sub + 1, len(crudo)):
+    for r in range(sub + 1, fin_fila):
         k = clave(crudo.iat[r, col_ruta])
         if k is None or k in tabla:
             continue
@@ -428,7 +456,7 @@ def tabla_calendario(estructura: EstructuraGeneral, n: int) -> dict[str, object]
 def tabla_morosidad(estructura: EstructuraGeneral, n: int) -> dict[str, object]:
     """CampaniaSaldo → Mora para la Campaña de Trabajo N (sección 4.8)."""
     crudo = estructura.campanias
-    fila, col, fin = _rango_bloque(crudo, n, "Campaña de Trabajo")
+    fila, col, fin, fin_fila = _rango_bloque(crudo, n, "Campaña de Trabajo")
     sub = _fila_subencabezado(crudo, fila, col, fin, ["campana", "mora"])
     nombres = {c: normalizar_texto(crudo.iat[sub, c]) for c in range(col, fin)}
 
@@ -436,7 +464,7 @@ def tabla_morosidad(estructura: EstructuraGeneral, n: int) -> dict[str, object]:
     col_mora = next((c for c, t in nombres.items() if "mora" in t), min(col + 1, fin - 1))
 
     tabla: dict[str, object] = {}
-    for r in range(sub + 1, len(crudo)):
+    for r in range(sub + 1, fin_fila):
         k = clave(crudo.iat[r, col_camp])
         if k is None or k in tabla:
             continue
