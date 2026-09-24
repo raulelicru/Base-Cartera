@@ -1166,6 +1166,17 @@ def _cp_numero(cp):
     return int(cp) if cp and str(cp).isdigit() else None
 
 
+def cartera_alineada(resultado: Resultado, cartera: pd.DataFrame | None) -> pd.DataFrame | None:
+    """Filas de la cartera original en el mismo orden que ``resultado.base`` (o None)."""
+    if cartera is None:
+        return None
+    base = resultado.base.reset_index(drop=True)
+    cart = cartera.reset_index(drop=True)
+    if "_fila_excel" in cart and cart["_fila_excel"].notna().all() and base["_fila_excel"].notna().all():
+        return cart.set_index("_fila_excel").reindex(base["_fila_excel"].astype(int)).reset_index(drop=True)
+    return cart if len(cart) == len(base) else None
+
+
 def tabla_visitas(
     resultado: Resultado, cartera: pd.DataFrame | None, fecha_asignacion
 ) -> pd.DataFrame:
@@ -1175,15 +1186,7 @@ def tabla_visitas(
     base = resultado.base.reset_index(drop=True)
     extras = pd.DataFrame(index=base.index)
     if cartera is not None:
-        cart = cartera.reset_index(drop=True)
-        if (
-            "_fila_excel" in cart
-            and cart["_fila_excel"].notna().all()
-            and base["_fila_excel"].notna().all()
-        ):
-            cart = cart.set_index("_fila_excel").reindex(base["_fila_excel"].astype(int)).reset_index(drop=True)
-        elif len(cart) != len(base):
-            cart = None
+        cart = cartera_alineada(resultado, cartera)
         if cart is not None:
             for campo, cands in CAMPOS_CARTERA_VISITAS.items():
                 col = _columna_cartera(cart.columns, cands)
@@ -1245,6 +1248,147 @@ def exportar_visitas(tabla: pd.DataFrame, fecha_asignacion=None) -> bytes:
         for j, valor in enumerate(fila, start=1):
             celda = ws.cell(row=i, column=j, value=valor_limpio(valor))
             celda._style = copy(estilos[j])
+    salida = io.BytesIO()
+    wb.save(salida)
+    return salida.getvalue()
+
+
+# --------------------------------------------------------------------------
+# Base de gestión con el formato acordado (plantilla EJEMPLO DE ESTRUCTURA DE BASE)
+# --------------------------------------------------------------------------
+
+PLANTILLA_GESTION = Path(__file__).parent / "plantillas" / "Base_gestion.xlsx"
+
+# Columnas que llena el sistema: encabezado de la plantilla → columna de la base calculada
+GESTION_SISTEMA = {
+    "ZONA": "ZONA",
+    "REGION": "REGION",
+    "RUTA": "RUTA",
+    "DIVISION": "DIVISION",
+    "ID COBRADOR": "ID COBRADOR",
+    "Direccion Calle": "Direccion Calle",
+    "Colonia": "Colonia",
+    "Municipio / Poblacion": "Municipio / Poblacion",
+    "Cp": "Cp",
+    "Estado": "Estado",
+    "CONCATENADO": "Concatenado",
+    "FECHA DE CIERRE": "Fecha de cierre",
+    "MOROCIDAD": "Morosidad",
+    "CAMPAÑA DE TRABAJO": "Campaña de trabajo",
+    "REFERENCIA DE PAGO": "Referencia de Pago",
+}
+# Columnas de la cartera que, si faltan en ella, se toman de la base calculada
+GESTION_RESPALDO = {
+    "Zona": "ZONA",
+    "NoDama": "NoDama",
+    "Referencia": "Referencia",
+    "AnioSaldo": "AnioSaldo",
+    "CampaniaSaldo": "CampaniaSaldo",
+    "DigitoVerificador": "DigitoVerificador",
+    "Direccion": "Direccion",
+}
+# Nombres (compactos) de columnas de la cartera que el sistema ya reemplaza: no se repiten al final
+_CARTERA_YA_USADAS = {
+    _compacto(c)
+    for c in list(GESTION_SISTEMA) + list(GESTION_SISTEMA.values()) + ["Morosidad", "Zona (Urbano/Rural)"]
+}
+
+
+def _valor_gestion(encabezado: str, fila_base: dict, fila_cartera: dict | None, columnas_cartera: dict):
+    enc = encabezado.strip()
+    if enc in GESTION_SISTEMA:
+        v = fila_base.get(GESTION_SISTEMA[enc])
+        if enc == "MOROCIDAD":
+            return _temporalidad(v)
+        return valor_limpio(v)
+    col = columnas_cartera.get(_compacto(enc))
+    if fila_cartera is not None and col is not None:
+        return valor_limpio(fila_cartera.get(col))
+    if enc in GESTION_RESPALDO:
+        return valor_limpio(fila_base.get(GESTION_RESPALDO[enc]))
+    return None
+
+
+def exportar_excel_gestion(resultado: Resultado, cartera: pd.DataFrame | None, campania_trabajo: int) -> bytes:
+    """Base de gestión con el orden de columnas, colores y letra de la plantilla acordada
+    (plantillas/Base_gestion.xlsx). Los datos de la cartera van bajo su encabezado; las columnas de
+    la cartera que no estén en la plantilla se agregan al final. En las filas que requieren revisión,
+    las celdas calculadas que quedaron vacías se marcan en amarillo."""
+    from copy import copy
+
+    from openpyxl import load_workbook
+    from openpyxl.styles import Font, PatternFill
+    from openpyxl.utils import get_column_letter
+
+    wb = load_workbook(PLANTILLA_GESTION)
+    ws = wb.active
+    encabezados = [c.value for c in ws[1]]
+    estilo_enc = {c.column: c._style for c in ws[1]}
+    estilo_dato = {c.column: c._style for c in ws[2]}
+    col_direccion = encabezados.index("Direccion") + 1  # modelo para columnas extra (encabezado azul)
+
+    cart = cartera_alineada(resultado, cartera)
+    columnas_cartera: dict[str, str] = {}
+    extra: list[str] = []
+    if cart is not None:
+        for c in cart.columns:
+            if str(c).startswith("_"):
+                continue
+            columnas_cartera.setdefault(_compacto(c), c)
+        en_plantilla = {_compacto(e) for e in encabezados if e}
+        for c in cart.columns:
+            k = _compacto(c)
+            if (
+                str(c).startswith("_")
+                or k in en_plantilla
+                or k in _CARTERA_YA_USADAS
+                or columnas_cartera.get(k) != c
+                or cart[c].map(es_vacio).all()
+            ):
+                continue
+            extra.append(c)
+
+    # Encabezados extra al final, con el estilo de las columnas de la cartera (azul)
+    for j, nombre in enumerate(extra, start=len(encabezados) + 1):
+        celda = ws.cell(row=1, column=j, value=nombre)
+        celda._style = copy(estilo_enc[col_direccion])
+        estilo_enc[j] = estilo_enc[col_direccion]
+        estilo_dato[j] = estilo_dato[col_direccion]
+
+    amarillo = PatternFill(start_color="FFFFFF00", end_color="FFFFFF00", fill_type="solid")
+    sistema = {i + 1 for i, e in enumerate(encabezados) if e and e.strip() in GESTION_SISTEMA}
+    base_filas = resultado.base.reset_index(drop=True).to_dict("records")
+    cart_filas = cart.to_dict("records") if cart is not None else [None] * len(base_filas)
+    for i, (fb, fc) in enumerate(zip(base_filas, cart_filas), start=2):
+        revisar = bool(fb.get("requiere_revision"))
+        for j, enc in enumerate(encabezados, start=1):
+            valor = _valor_gestion(enc, fb, fc, columnas_cartera) if enc else None
+            celda = ws.cell(row=i, column=j, value=valor)
+            celda._style = copy(estilo_dato[j])
+            if revisar and valor is None and j in sistema:
+                celda.fill = amarillo
+        for j, c in enumerate(extra, start=len(encabezados) + 1):
+            celda = ws.cell(row=i, column=j, value=valor_limpio(fc.get(c)) if fc else None)
+            celda._style = copy(estilo_dato[j])
+
+    # Hojas de revisión y resumen (la hoja principal queda con el formato de la plantilla)
+    base = resultado.base
+    rev = wb.create_sheet("Revision")
+    rev.append(["Fila", "NoDama", "ZONA", "Direccion", "Cp", COLUMNA_MOTIVO])
+    for n, fila in enumerate(base.to_dict("records"), start=2):
+        if fila["requiere_revision"]:
+            rev.append([n, fila["NoDama"], fila["ZONA"], fila["Direccion"], fila["Cp"], fila["motivo_revision"]])
+    res = wb.create_sheet("Resumen")
+    res.append(["Concepto", "Valor"])
+    res.append(["Campaña de trabajo", campania_trabajo])
+    res.append(["Fecha de generación", datetime.now().strftime("%d/%m/%Y %H:%M")])
+    for k, v in resultado.resumen.items():
+        res.append([k, v])
+    for hoja, anchos in ((rev, [8, 14, 10, 60, 8, 70]), (res, [34, 22])):
+        for i, ancho in enumerate(anchos, start=1):
+            hoja.column_dimensions[get_column_letter(i)].width = ancho
+            hoja.cell(row=1, column=i).font = Font(bold=True)
+
     salida = io.BytesIO()
     wb.save(salida)
     return salida.getvalue()

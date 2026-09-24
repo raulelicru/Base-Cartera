@@ -51,14 +51,15 @@ Sin llave, la app funciona en **modo local**: guarda la Estructura y el catálog
    de 1 fila por CP (`catalogo_cp` en Supabase o `data/catalogo_cp.parquet` en modo local). Actualícelo al menos una vez al año.
 3. **Pantalla principal**: suba la Cartera; el número de Campaña de Trabajo se infiere del nombre del archivo
    (`…Campaña_19…` → 19) y puede corregirse. Pulse **Generar base**.
-4. Revise el resumen y descargue:
-   - **Cartera con columnas anexadas** (principal): el mismo archivo que se subió, con las mismas hojas,
-     columnas, orden, colores y formato. El sistema llena en su lugar las columnas que ya vienen vacías
-     (REGION, RUTA, DIVISION, ID COBRADOR, Concatenado, Fecha de cierre, Morosidad, Campaña de trabajo,
-     Referencia de Pago) y **anexa al final** las que no existen (Direccion Calle, Colonia,
-     Municipio / Poblacion, Cp, Estado, Zona (Urbano/Rural) y Motivo de revisión). Se agregan las hojas
-     *Revision* y *Resumen*. Sólo para archivos `.xlsx`/`.xlsm`.
-   - **Excel formato estándar** (22 columnas de la especificación) o **CSV**.
+4. Revise el resumen y descargue la **base de gestión**: sale con el orden de columnas, colores y letra del
+   ejemplo acordado (plantilla `plantillas/Base_gestion.xlsx`, 40 columnas): ZONA, REGION, RUTA, DIVISION,
+   ID COBRADOR (gris); los datos de la cartera con Direccion Calle, Colonia, Municipio / Poblacion, Cp y Estado
+   (azul); CONCATENADO, FECHA DE CIERRE, MOROCIDAD (`Mora N`), CAMPAÑA DE TRABAJO, REFERENCIA DE PAGO y la
+   Direccion original al final. Cada dato de la cartera se coloca bajo el encabezado con su mismo nombre; las
+   columnas de la cartera que no están en la plantilla se agregan al final. En filas que requieren revisión,
+   los datos calculados que faltan se marcan en amarillo; se agregan las hojas *Revision* y *Resumen*.
+
+   En **Otros formatos**: la cartera original con columnas anexadas, el formato estándar de 22 columnas y CSV.
 
 **Base para visitas de gestores:** debajo de las descargas se genera la base de visitas con el mismo formato
 de la plantilla `plantillas/Base_para_visitas.xlsx` (encabezado, colores, anchos y fecha `d-mmm`). Todas las
@@ -85,7 +86,7 @@ campaña (pero *Calendario de Cierre* sí), la app muestra una tabla editable Ca
 sugerencia (la tabla de la última campaña disponible, recorrida las campañas que faltan). Al confirmarla se
 puede generar la base y queda una advertencia en el resumen. Lo correcto es agregar el bloque al archivo.
 
-**Formato de salida (barra lateral):** color de las columnas que anexa el sistema (azul claro por defecto)
+**Formato de salida (barra lateral, sólo para *Su cartera + columnas del sistema*):** color de las columnas que anexa el sistema (azul claro por defecto)
 y la opción (activada por defecto) de pintar también las columnas que ya venían vacías en la cartera y llena el sistema. En las filas que requieren
 revisión, las celdas anexadas se marcan en amarillo y el motivo va en *Motivo de revisión*; las celdas
 originales no se tocan.

@@ -16,7 +16,7 @@ import streamlit as st
 import almacenamiento as alm
 import procesamiento as proc
 
-VERSION = "24/09/2026 · v5 catálogo incluido + carga rápida"
+VERSION = "24/09/2026 · v6 formato de base acordado"
 DATA_DIR = Path(os.environ.get("BASE_CARTERA_DATA_DIR", Path(__file__).parent / "data"))
 
 st.set_page_config(page_title="Base de Cartera", page_icon="📋", layout="wide")
@@ -98,7 +98,9 @@ with st.sidebar:
     if estructura is not None:
         st.success(f"Cargada ({fmt_fecha(fecha_est)})")
         def _rango(nums):
-            return f"{nums[0]}–{nums[-1]}" if nums and nums == list(range(nums[0], nums[-1] + 1)) else ", ".join(map(str, nums)) or "—"
+            if len(nums) > 2 and nums == list(range(nums[0], nums[-1] + 1)):
+                return f"{nums[0]}–{nums[-1]}"
+            return ", ".join(map(str, nums)) or "—"
 
         st.caption(
             f"{len(estructura.zonas):,} zonas · Campañas de trabajo en *Calendario de Cierre*: "
@@ -175,8 +177,8 @@ with st.sidebar:
     # ---- Formato de salida
     st.subheader("Formato de salida")
     st.caption(
-        "El Excel sale igual que la cartera enviada (mismas columnas, orden y colores); "
-        "el sistema llena las columnas vacías y anexa al final las que no existen."
+        "Sólo para la descarga *Su cartera + columnas del sistema* (en *Otros formatos*). "
+        "La base de gestión principal usa siempre los colores del formato acordado."
     )
     color_sistema = st.color_picker(
         "Color de las columnas que agrega el sistema", value=proc.COLOR_SISTEMA, key="color_sistema"
@@ -208,6 +210,11 @@ def archivos_descarga(clave: str, _resultado, _original, n: int, color: str, col
         except Exception as e:  # noqa: BLE001
             original = e
     return original, proc.exportar_excel(_resultado, n), proc.exportar_csv(_resultado)
+
+
+@st.cache_data(show_spinner="Preparando base de gestión…", max_entries=6)
+def archivo_gestion(clave: str, _resultado, _cartera, n: int) -> bytes:
+    return proc.exportar_excel_gestion(_resultado, _cartera, n)
 
 
 @st.cache_data(show_spinner=False, max_entries=6)
@@ -289,39 +296,49 @@ def mostrar_resultado(resultado: proc.Resultado, n: int, clave: str, original: t
     with st.expander("Detalle del resumen"):
         st.table(pd.DataFrame(list(r.items()), columns=["Concepto", "Filas"]).set_index("Concepto"))
 
-    excel_original, excel_estandar, csv = archivos_descarga(
-        clave, resultado, original, n, color_sistema, colorear_llenadas
+    cartera = cartera_original(clave, original)
+    excel_gestion = archivo_gestion(clave, resultado, cartera, n)
+    st.download_button(
+        "⬇️ Descargar base de gestión",
+        data=excel_gestion,
+        file_name=f"Base_Gestion_Campana_{n}.xlsx",
+        mime=alm.MIME_XLSX,
+        type="primary",
+        key=f"gest_{clave}",
     )
-    if isinstance(excel_original, bytes):
-        base_nombre, _, ext = original[1].rpartition(".")
-        st.download_button(
-            "⬇️ Descargar Excel (su cartera + columnas del sistema)",
-            data=excel_original,
-            file_name=f"{base_nombre}_Base_Gestion.{ext}",
-            mime=alm.MIME_XLSX if ext.lower() == "xlsx" else "application/vnd.ms-excel.sheet.macroEnabled.12",
-            type="primary",
-            key=f"orig_{clave}",
-        )
-        st.caption(
-            "Sale igual que la cartera enviada (mismas columnas, orden y colores). Las columnas que pone el "
-            "sistema van en el color elegido en **Formato de salida**; las filas a revisar, en amarillo."
-        )
-    elif isinstance(excel_original, Exception):
-        st.error(f"No se pudo conservar el formato de la cartera: {excel_original}")
-    elif original is None:
-        st.warning("Esta corrida no tiene guardado el archivo original; sólo está disponible el formato estándar.")
-    else:
+    st.caption(
+        "Con el orden de columnas, colores y letra del ejemplo acordado. En las filas que requieren revisión, "
+        "los datos calculados que faltan se marcan en amarillo (el motivo está en la hoja *Revision*)."
+    )
+    if cartera is None:
         st.warning(
-            "Para que el Excel salga igual que la cartera enviada, súbala como **.xlsx** "
-            "(ábrala en Excel y use *Guardar como → Libro de Excel (.xlsx)*)."
+            "No se pudo leer la cartera original de esta corrida: las columnas que vienen de la cartera "
+            "(Nombre, teléfonos, situación, etc.) saldrán vacías."
         )
 
-    with st.expander("Otros formatos (formato estándar de 22 columnas, CSV)", expanded=not isinstance(excel_original, bytes)):
-        o1, o2, _ = st.columns([2, 1, 2])
+    with st.expander("Otros formatos (su cartera + columnas del sistema, formato estándar de 22 columnas, CSV)"):
+        excel_original, excel_estandar, csv = archivos_descarga(
+            clave, resultado, original, n, color_sistema, colorear_llenadas
+        )
+        o0, o1, o2 = st.columns([3, 2, 1])
+        if isinstance(excel_original, bytes):
+            base_nombre, _, ext = original[1].rpartition(".")
+            o0.download_button(
+                "Su cartera + columnas del sistema",
+                data=excel_original,
+                file_name=f"{alm._nombre_seguro(base_nombre)}_Base_Gestion.{ext}",
+                mime=alm.MIME_XLSX if ext.lower() == "xlsx" else "application/vnd.ms-excel.sheet.macroEnabled.12",
+                width="stretch",
+                key=f"orig_{clave}",
+            )
+        elif isinstance(excel_original, Exception):
+            o0.caption(f"No se pudo conservar el formato de la cartera: {excel_original}")
+        else:
+            o0.caption("Sólo disponible si la cartera se subió como .xlsx.")
         o1.download_button(
-            "Excel formato estándar (22 columnas)",
+            "Formato estándar (22 columnas)",
             data=excel_estandar,
-            file_name=f"Base_Gestion_Estandar_Campaña_{n}.xlsx",
+            file_name=f"Base_Gestion_Estandar_Campana_{n}.xlsx",
             mime=alm.MIME_XLSX,
             width="stretch",
             key=f"xlsx_{clave}",
@@ -329,7 +346,7 @@ def mostrar_resultado(resultado: proc.Resultado, n: int, clave: str, original: t
         o2.download_button(
             "CSV",
             data=csv,
-            file_name=f"Base_Gestion_Estandar_Campaña_{n}.csv",
+            file_name=f"Base_Gestion_Estandar_Campana_{n}.csv",
             mime="text/csv",
             width="stretch",
             key=f"csv_{clave}",
