@@ -340,6 +340,19 @@ def leer_catalogo_cp(contenido: bytes, nombre: str) -> pd.DataFrame:
     return catalogo
 
 
+CATALOGO_INCLUIDO = Path(__file__).parent / "datos" / "catalogo_cp_sepomex.txt.gz"
+
+
+def catalogo_cp_incluido() -> pd.DataFrame | None:
+    """Catálogo SEPOMEX que viene con la app (una fila por CP: Cp, Municipio, Estado, Zona)."""
+    if not CATALOGO_INCLUIDO.exists():
+        return None
+    df = pd.read_csv(CATALOGO_INCLUIDO, sep="|", dtype=str, keep_default_na=False, compression="gzip")
+    df["Cp"] = df["Cp"].str.strip().str.zfill(5)
+    df = df.replace({"": None})
+    return df[["Cp", "Municipio", "Estado", "Zona"]].drop_duplicates("Cp").reset_index(drop=True)
+
+
 # --------------------------------------------------------------------------
 # Estructura General de Bases
 # --------------------------------------------------------------------------

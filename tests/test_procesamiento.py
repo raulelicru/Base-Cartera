@@ -187,3 +187,12 @@ def test_generar_base_con_morosidad_manual():
     res = proc.generar_base(cartera, e, None, 20, morosidad_manual={"15": 3, 18: "2", "3": None})
     assert res.base["Morosidad"].tolist() == [3, "2", None]
     assert any("tabla capturada en la app" in a for a in res.advertencias)
+
+
+def test_catalogo_incluido_cubre_cps_reales():
+    cat = proc.catalogo_cp_incluido()
+    assert len(cat) > 30000 and cat["Cp"].is_unique
+    d = cat.set_index("Cp").to_dict("index")
+    assert d["07140"] == {"Municipio": "Gustavo A. Madero", "Estado": "Ciudad de México", "Zona": "Urbano"}
+    assert d["45685"]["Municipio"] == "El Salto" and d["45679"]["Estado"] == "Jalisco"
+    assert set(cat["Zona"].dropna()) <= {"Urbano", "Rural", "Semiurbano"}

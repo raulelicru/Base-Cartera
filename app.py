@@ -16,7 +16,7 @@ import streamlit as st
 import almacenamiento as alm
 import procesamiento as proc
 
-VERSION = "24/09/2026 · v3 morosidad capturable"
+VERSION = "24/09/2026 · v4 catálogo de CP incluido"
 DATA_DIR = Path(os.environ.get("BASE_CARTERA_DATA_DIR", Path(__file__).parent / "data"))
 
 st.set_page_config(page_title="Base de Cartera", page_icon="📋", layout="wide")
@@ -50,6 +50,11 @@ def obtener_almacen(url: str | None, key: str | None):
 def cargar_estructura(_almacen, _version) -> proc.EstructuraGeneral | None:
     contenido = _almacen.leer_estructura()
     return proc.leer_estructura(contenido) if contenido else None
+
+
+@st.cache_data(show_spinner=False)
+def catalogo_incluido() -> pd.DataFrame | None:
+    return proc.catalogo_cp_incluido()
 
 
 @st.cache_data(show_spinner="Cargando catálogo de códigos postales…")
@@ -137,7 +142,15 @@ with st.sidebar:
         st.success(f"Cargado ({fmt_fecha(fecha_cp)})")
         st.caption(f"{len(catalogo):,} códigos postales")
     else:
-        st.info("Aún no se ha cargado. Descárguelo de correosdemexico.gob.mx (TXT, XLS o ZIP).")
+        catalogo = catalogo_incluido()
+        if catalogo is not None:
+            st.success("Usando el catálogo SEPOMEX incluido en la app")
+            st.caption(
+                f"{len(catalogo):,} códigos postales. Para usar una versión más reciente, descargue el catálogo "
+                "oficial de correosdemexico.gob.mx y súbalo aquí (TXT, XLS o ZIP)."
+            )
+        else:
+            st.info("Aún no se ha cargado. Descárguelo de correosdemexico.gob.mx (TXT, XLS o ZIP).")
 
     archivo_cp = st.file_uploader(
         "Reemplazar catálogo SEPOMEX", type=["txt", "csv", "xls", "xlsx", "zip"], key="up_cp"
